@@ -65,8 +65,6 @@ def test_websocket_reconnect_failure_is_visible(monkeypatch):
         event_sink=lambda at, kind, symbol, status, payload: (
             events.append(kind),
             manager._stop.set() if len(events) >= 2 else None))
-    async def fail_connect(*args, **kwargs):
-        raise OSError("simulated connection failure")
     class FailedContext:
         async def __aenter__(self):
             raise OSError("simulated connection failure")
