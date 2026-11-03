@@ -11,3 +11,14 @@
 - /api/v1/market/spot, /api/v1/market/futures and /api/v1/funding/current now fetch live bulk public REST snapshots and paginate the eligible USDT symbols. The historical SQLite endpoints retain only symbols that passed the scanner's detailed enrichment stage.
 - The scanner does not place orders and does not connect to authenticated Binance account APIs.
 - Automated test suite passed in GitHub Actions: 16 tests passed. See docs/PHASE_2_TEST_REPORT.md for the exact run.
+
+
+## Phase 2.1 additions and remaining limitations
+
+- Public combined WebSocket streams are integrated and can be enabled with WEBSOCKET_ENABLED=true; they are disabled by default.
+- The scanner uses normalized WebSocket state after bootstrap when the current eligible universe has a complete fresh snapshot. Exchange metadata and shortlisted depth/history still use REST.
+- Spot bookTicker lacks an exchange event timestamp; receive time and update IDs are used. Exchange clock offset is synchronized once at startup.
+- Exchange quantity/notional filters are applied to theoretical market-order quantities, but account balances, fee tier, margin and order acceptance are not checked.
+- Historical funding pagination and bounded gap backfill are implemented; page caps can leave older gaps, which are surfaced.
+- Opportunity observations and appearance/disappearance events are persisted only when OBSERVATION_MODE=true. No order or PnL simulation is performed.
+- See docs/PHASE_2_1_ARCHITECTURE.md for detailed design and limitations. CI results must be read from the actual Phase 2.1 workflow run, not inferred from the previous Phase 2 run.

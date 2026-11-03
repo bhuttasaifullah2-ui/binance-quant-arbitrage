@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     futures_taker_fee_rate: str = "0.0005"
     max_depth_symbols_per_cycle: int = 30
     max_history_symbols_per_cycle: int = 30
+    funding_history_max_pages: int = 5
+    max_hedge_mismatch: str = "0.005"
+    max_clock_skew_ms: int = 5000
+    websocket_streams_per_connection: int = 400
+    observation_mode: bool = False
     orderbook_limit: int = 20
     depth_levels: int = 20
     history_limit: int = 100
@@ -35,6 +40,8 @@ class Settings(BaseSettings):
     score_weight_basis: str = "0.10"
     score_weight_freshness: str = "0.10"
     score_weight_funding_volatility: str = "0.05"
+    score_weight_hedge_precision: str = "0.05"
+    score_weight_residual_exposure: str = "0.05"
     ranking_max_spread_bps: str = "10"
     ranking_max_slippage_bps: str = "30"
     ranking_max_basis_bps: str = "100"
