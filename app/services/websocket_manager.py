@@ -33,12 +33,17 @@ class BinanceWebSocketManager:
             "reconnect_attempts": 0, "reconnect_count": 0, "messages": 0,
             "consecutive_failures": 0, "last_message_ms": None, "last_update_id": None,
             "total_processing_latency_ms": 0.0, "max_processing_latency_ms": 0.0,
-            "subscription_status": "PENDING", "recovery_durations_ms": []})
+            "subscription_status": "PENDING", "recovery_durations_ms": [], "uptime_ms": 0})
 
     def _set_health(self, market: str, value: dict[str, Any]) -> None:
         metric = self._metric(market)
-        metric.update(value)
         now = int(time.time() * 1000)
+        was_connected = bool(metric.get("connected"))
+        if was_connected and value.get("connected") is False:
+            metric["uptime_ms"] += max(0, now - self._connected_since.get(market, now))
+        if value.get("connected") is True and not was_connected:
+            self._connected_since[market] = now
+        metric.update(value)
         metric["checked_at_ms"] = now
         metric["average_processing_latency_ms"] = (
             metric["total_processing_latency_ms"] / metric["messages"] if metric["messages"] else None)
