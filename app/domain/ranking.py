@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -64,5 +65,5 @@ def score_opportunity_breakdown(*, net_edge_usdt: Decimal, funding_positive_frac
     return {"score": score, **factors}
 
 
-def score_opportunity(**kwargs: Decimal) -> Decimal:
+def score_opportunity(**kwargs: Any) -> Decimal:
     return score_opportunity_breakdown(**kwargs)["score"]
