@@ -45,6 +45,15 @@ class MarketScanner:
     def opportunities(self) -> list[dict[str, Any]]:
         return list(self._opportunities)
 
+    @property
+    def fresh_opportunities(self) -> list[dict[str, Any]]:
+        if self.last_scan_ms is None:
+            return []
+        age_ms = int(time.time() * 1000) - self.last_scan_ms
+        if age_ms > self.config.max_data_age_seconds * 1000:
+            return []
+        return list(self._opportunities)
+
     async def scan_once(self) -> list[dict[str, Any]]:
         async with self._lock:
             started = int(time.time() * 1000)
@@ -176,6 +185,8 @@ class MarketScanner:
                 return self._opportunities
             except Exception as exc:
                 self.last_error=f"{type(exc).__name__}: {exc}"
+                self._opportunities = []
+                self.last_valid_count = 0
                 logger.exception("Market scan failed")
                 return []
 
