@@ -1,7 +1,6 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -140,9 +139,9 @@ class MarketScanner:
                         fut_depth=sum((_d(p)*_d(q) for p,q in fd["bids"][:self.config.depth_levels]),Decimal("0")) + sum((_d(p)*_d(q) for p,q in fd["asks"][:self.config.depth_levels]),Decimal("0"))
                         bps=basis_bps(spot_ask,mark)
                         data_age=Decimal("0")
-                        weight=Decimal("1")-_d(self.config.basis_risk_haircut)
                         # Conservative basis haircut is a ranking penalty, not an assumed cash gain.
-                        net=profit.expected_net - abs(bps)/Decimal("10000")*notional*_d(self.config.basis_risk_haircut)
+                        basis_penalty = abs(bps)/Decimal("10000")*notional*_d(self.config.basis_risk_haircut)
+                        net=profit.expected_net - basis_penalty
                         weights=RankingWeights(
                             net_edge=_d(self.config.score_weight_net_edge),
                             funding_consistency=_d(self.config.score_weight_funding_consistency),
@@ -178,7 +177,7 @@ class MarketScanner:
                         spot_exposure = spot_qty_theoretical * spot_ask
                         futures_exposure = futures_qty_theoretical * mark
                         hedge_ratio = futures_exposure / spot_exposure if spot_exposure else Decimal("0")
-                        break_even_rate = (profit.entry_fees + profit.exit_fees + profit.slippage) / notional
+                        break_even_rate = (profit.entry_fees + profit.exit_fees + profit.slippage + basis_penalty) / notional
                         out.append({"symbol":symbol,"score":str(score),"funding_rate":str(funding),
                             "funding_history":{k:str(v) for k,v in stats.items()},
                             "funding_trend_delta":None if funding_trend_delta is None else str(funding_trend_delta),
