@@ -44,6 +44,10 @@ CREATE TABLE IF NOT EXISTS opportunity_observations (
  score TEXT NOT NULL, expected_net_usdt TEXT NOT NULL, eligible INTEGER NOT NULL,
  payload_json TEXT NOT NULL, UNIQUE(symbol, observed_at_ms));
 CREATE INDEX IF NOT EXISTS idx_opportunities_symbol_time ON opportunity_observations(symbol, observed_at_ms DESC);
+CREATE TABLE IF NOT EXISTS opportunity_lifecycle (
+ id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, event_type TEXT NOT NULL,
+ observed_at_ms INTEGER NOT NULL, score TEXT, expected_net_usdt TEXT);
+CREATE INDEX IF NOT EXISTS idx_lifecycle_symbol_time ON opportunity_lifecycle(symbol, observed_at_ms DESC);
 CREATE TABLE IF NOT EXISTS data_quality_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, event_time_ms INTEGER NOT NULL,
  reason TEXT NOT NULL, payload_json TEXT NOT NULL);
@@ -147,6 +151,23 @@ class SQLiteMarketStore:
                     (row["symbol"], observed_at_ms, str(row.get("score", "0")),
                      str(row.get("estimated_net_usdt", "0")), 1, json.dumps(row, default=str)))
 
+    def save_opportunity_lifecycle(self, symbol: str, event_type: str, observed_at_ms: int,
+                                  score: str | None = None, expected_net_usdt: str | None = None) -> None:
+        with self._connect() as conn:
+            conn.execute("""INSERT INTO opportunity_lifecycle
+                (symbol,event_type,observed_at_ms,score,expected_net_usdt) VALUES(?,?,?,?,?)""",
+                (symbol.upper(), event_type, observed_at_ms, score, expected_net_usdt))
+
+    def observation_summary(self) -> dict[str, Any]:
+        with self._connect() as conn:
+            total = conn.execute("SELECT COUNT(*) FROM opportunity_observations").fetchone()[0]
+            events = conn.execute("SELECT COUNT(*) FROM opportunity_lifecycle").fetchone()[0]
+            latest = conn.execute("SELECT MAX(observed_at_ms) FROM opportunity_observations").fetchone()[0]
+            active = conn.execute("""SELECT COUNT(*) FROM (
+                SELECT symbol, MAX(observed_at_ms) ts FROM opportunity_observations GROUP BY symbol)""").fetchone()[0]
+        return {"opportunity_snapshots": int(total), "lifecycle_events": int(events),
+                "symbols_observed": int(active), "last_observation_ms": latest}
+
     def save_quality_event(self, event: dict[str, Any], event_time_ms: int) -> None:
         with self._connect() as conn:
             conn.execute("""INSERT INTO data_quality_events(symbol,event_time_ms,reason,payload_json)
@@ -200,6 +221,7 @@ class SQLiteMarketStore:
             conn.execute("DELETE FROM funding_observations WHERE funding_time_ms < ?", (cutoff,))
             conn.execute("DELETE FROM market_data_events WHERE received_at_ms < ?", (cutoff,))
             conn.execute("DELETE FROM opportunity_observations WHERE observed_at_ms < ?", (cutoff,))
+            conn.execute("DELETE FROM opportunity_lifecycle WHERE observed_at_ms < ?", (cutoff,))
             conn.execute("DELETE FROM data_quality_events WHERE event_time_ms < ?", (cutoff,))
             return a
 
