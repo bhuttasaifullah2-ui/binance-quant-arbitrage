@@ -4,7 +4,6 @@ import time
 from decimal import Decimal, InvalidOperation
 from typing import Any
 import websockets
-from app.exchange.binance.public_client import BinanceAPIError
 
 
 class LiveValidationService:
