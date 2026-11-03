@@ -1,6 +1,7 @@
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from statistics import median
 from .models import FundingObservation
+
 
 def funding_payment(notional: Decimal, funding_rate: Decimal, short_receives_positive: bool = True) -> Decimal:
     """Signed cash flow for the short leg; positive means receipt by short."""
@@ -9,33 +10,62 @@ def funding_payment(notional: Decimal, funding_rate: Decimal, short_receives_pos
     sign = Decimal("1") if short_receives_positive else Decimal("-1")
     return notional * funding_rate * sign
 
+
 def summarize_funding(observations: list[FundingObservation]) -> dict[str, Decimal | int]:
     if not observations:
         return {"count": 0, "mean": Decimal("0"), "median": Decimal("0"),
                 "min": Decimal("0"), "max": Decimal("0"), "negative_fraction": Decimal("0"),
-                "positive_fraction": Decimal("0"), "volatility": Decimal("0")}
-    rates = sorted(x.funding_rate for x in observations)
+                "positive_fraction": Decimal("0"), "volatility": Decimal("0"),
+                "stddev": Decimal("0"), "positive_percent": Decimal("0"),
+                "negative_percent": Decimal("0"), "consecutive_positive": 0,
+                "consecutive_negative": 0, "recent_trend": Decimal("0"),
+                "consistency": Decimal("0")}
+    ordered = sorted(observations, key=lambda x: x.funding_time_ms)
+    rates = [x.funding_rate for x in ordered]
     n = len(rates)
     mean = sum(rates, Decimal("0")) / n
     variance = sum(((x - mean) ** 2 for x in rates), Decimal("0")) / n
+    positive = sum(1 for x in rates if x > 0)
+    negative = sum(1 for x in rates if x < 0)
+    cp = cn = 0
+    for rate in reversed(rates):
+        if rate > 0 and cn == 0:
+            cp += 1
+        else:
+            break
+    for rate in reversed(rates):
+        if rate < 0 and cp == 0:
+            cn += 1
+        else:
+            break
+    window = max(1, min(3, n // 2))
+    if n >= 2:
+        recent_trend = (sum(rates[-window:], Decimal("0")) / window
+                        - sum(rates[-2*window:-window], Decimal("0")) / window)
+    else:
+        recent_trend = Decimal("0")
+    positive_fraction = Decimal(positive) / n
     return {
-        "count": n,
-        "mean": mean,
-        "median": Decimal(str(median(rates))),
-        "min": rates[0],
-        "max": rates[-1],
-        "negative_fraction": Decimal(sum(1 for x in rates if x < 0)) / n,
-        "positive_fraction": Decimal(sum(1 for x in rates if x > 0)) / n,
-        "volatility": variance.sqrt(),
+        "count": n, "mean": mean, "median": Decimal(str(median(rates))),
+        "min": min(rates), "max": max(rates),
+        "negative_fraction": Decimal(negative) / n,
+        "positive_fraction": positive_fraction,
+        "positive_percent": positive_fraction * 100,
+        "negative_percent": Decimal(negative) / n * 100,
+        "volatility": variance.sqrt(), "stddev": variance.sqrt(),
+        "consecutive_positive": cp, "consecutive_negative": cn,
+        "recent_trend": recent_trend, "consistency": positive_fraction,
     }
 
+
 def detect_funding_interval_hours(funding_times_ms: list[int], default_hours: int = 8) -> int:
-    """Infer interval from observed settlement timestamps; fall back to Binance default."""
+    """Infer interval from settlement timestamps without binary floating point."""
     ordered = sorted(set(funding_times_ms))
     if len(ordered) < 2:
         return default_hours
     gaps = [b - a for a, b in zip(ordered, ordered[1:]) if b > a]
     if not gaps:
         return default_hours
-    hours = int(round(float(Decimal(str(median(gaps))) / Decimal("3600000"))))
-    return hours if 1 <= hours <= 24 else default_hours
+    hours = (Decimal(str(median(gaps))) / Decimal("3600000")).to_integral_value(rounding=ROUND_HALF_UP)
+    result = int(hours)
+    return result if 1 <= result <= 24 else default_hours
