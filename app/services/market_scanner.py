@@ -237,7 +237,13 @@ class MarketScanner:
                         notional = _d(self.config.trade_notional_usdt)
                         spot_filter = SymbolFilters.from_exchange_info(spot_meta[symbol], "spot")
                         futures_filter = SymbolFilters.from_exchange_info(futures_meta[symbol], "futures")
-                        hedge = matched_valid_hedge(notional, spot_ask, mark, spot_filter, futures_filter,
+                        spot_entry_est = estimate_vwap(sd["asks"], notional, "buy")
+                        futures_entry_est = estimate_vwap(fd["bids"], notional, "sell")
+                        if (spot_entry_est is None or futures_entry_est is None or
+                                not spot_entry_est.complete or not futures_entry_est.complete):
+                            self._reject(symbol, "insufficient entry-side order-book depth", now); continue
+                        hedge = matched_valid_hedge(notional, spot_entry_est.vwap, futures_entry_est.vwap,
+                                                    spot_filter, futures_filter,
                                                     _d(self.config.max_hedge_mismatch))
                         if not hedge["executable"]:
                             self._reject(symbol, ";".join(hedge["reasons"]), now); continue
@@ -269,7 +275,7 @@ class MarketScanner:
                         history_gaps = funding_history_gaps(funding_obs, funding_interval)
                         if history_gaps:
                             self._reject(symbol, f"historical funding gaps detected:{len(history_gaps)}", now)
-                        bps = basis_bps(spot_ask, mark)
+                        bps = basis_bps(spot_buy.vwap, fut_sell.vwap)
                         basis_penalty = abs(bps)/Decimal("10000")*notional*_d(self.config.basis_risk_haircut)
                         net = gross_funding - entry_fees - exit_fees - slippage_cost - basis_penalty
                         age_ms = 0
@@ -298,8 +304,8 @@ class MarketScanner:
                         score_factors = score_opportunity_breakdown(
                             net_edge_usdt=net, funding_positive_fraction=stats["positive_fraction"],
                             funding_volatility=stats["volatility"],
-                            spot_depth_usdt=spot_buy.quote_notional + spot_sell.quote_notional,
-                            futures_depth_usdt=fut_sell.quote_notional + fut_buy.quote_notional,
+                            spot_depth_usdt=spot_visible_depth,
+                            futures_depth_usdt=futures_visible_depth,
                             spot_spread_bps=ss, futures_spread_bps=fs,
                             estimated_slippage_bps=sum(slips, Decimal("0")), basis_bps_value=bps,
                             data_age_seconds=Decimal(age_ms)/1000,
@@ -314,14 +320,16 @@ class MarketScanner:
                         score = score_factors["score"]
                         if next_funding <= now or stats["count"] == 0 or net <= _d(self.config.min_net_edge_usdt):
                             self._reject(symbol, "funding history absent/expired or estimated net edge below threshold", now); continue
+                        spot_visible_depth = sum((_d(p)*_d(q) for p,q in sd["bids"][:self.config.depth_levels]), Decimal("0")) + sum((_d(p)*_d(q) for p,q in sd["asks"][:self.config.depth_levels]), Decimal("0"))
+                        futures_visible_depth = sum((_d(p)*_d(q) for p,q in fd["bids"][:self.config.depth_levels]), Decimal("0")) + sum((_d(p)*_d(q) for p,q in fd["asks"][:self.config.depth_levels]), Decimal("0"))
                         row = {"symbol": symbol, "spot_bid": spot_bid, "spot_ask": spot_ask,
                                "spot_last": _d(st["lastPrice"]), "spot_quote_volume": sv,
                                "futures_bid": fut_bid, "futures_ask": fut_ask,
                                "futures_mark": mark, "futures_index": index, "futures_quote_volume": fv,
                                "funding_rate": funding, "next_funding_time_ms": next_funding,
                                "open_interest": _d(oi["openInterest"]),
-                               "spot_depth_usdt": spot_buy.quote_notional + spot_sell.quote_notional,
-                               "futures_depth_usdt": fut_sell.quote_notional + fut_buy.quote_notional,
+                               "spot_depth_usdt": spot_visible_depth,
+                               "futures_depth_usdt": futures_visible_depth,
                                "spot_slippage_bps": spot_buy.slippage_bps + spot_sell.slippage_bps,
                                "futures_slippage_bps": fut_sell.slippage_bps + fut_buy.slippage_bps,
                                "basis_bps": bps, "observed_at_ms": now, "source": "binance_ws" if ws_ready else "binance_rest"}
@@ -331,13 +339,19 @@ class MarketScanner:
                             "symbol": symbol, "score": str(score), "funding_rate": str(funding),
                             "funding_history": {k: str(v) for k, v in stats.items()},
                             "next_funding_time_ms": next_funding, "funding_interval_hours": funding_interval,
-                            "spot_price": str(spot_ask), "futures_mark": str(mark),
+                            "spot_price": str(spot_buy.vwap), "futures_mark": str(mark),
+                            "entry_spot_vwap": str(spot_buy.vwap), "entry_futures_vwap": str(fut_sell.vwap),
+                            "estimated_exit_spot_vwap": str(spot_sell.vwap),
+                            "estimated_exit_futures_vwap": str(fut_buy.vwap),
                             "spot_volume_24h_usdt": str(sv), "futures_volume_24h_usdt": str(fv),
                             "spot_spread_bps": str(ss), "futures_spread_bps": str(fs),
                             "spot_depth_usdt": str(row["spot_depth_usdt"]),
                             "futures_depth_usdt": str(row["futures_depth_usdt"]),
                             "estimated_slippage_bps": str(sum(slips, Decimal("0"))),
-                            "basis_bps": str(bps), "spot_quantity": str(hedge["spot_quantity"]),
+                            "basis_bps": str(bps), "entry_basis_bps": str(bps),
+                            "estimated_exit_basis_bps_assumption": str(bps),
+                            "basis_sensitivity_per_10bps_usdt": str(matched_notional*Decimal("10")/Decimal("10000")),
+                            "spot_quantity": str(hedge["spot_quantity"]),
                             "futures_quantity": str(hedge["futures_quantity"]),
                             "spot_notional": str(hedge["spot_notional"]),
                             "futures_notional": str(hedge["futures_notional"]),
