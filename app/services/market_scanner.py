@@ -320,6 +320,8 @@ class MarketScanner:
                             age_ms = max(0, now - (rest_snapshot_ms or now))
                             if age_ms > self.config.max_data_age_seconds*1000:
                                 self._reject(symbol, "REST snapshot stale", now); continue
+                        spot_visible_depth = sum((_d(p)*_d(q) for p,q in sd["bids"][:self.config.depth_levels]), Decimal("0")) + sum((_d(p)*_d(q) for p,q in sd["asks"][:self.config.depth_levels]), Decimal("0"))
+                        futures_visible_depth = sum((_d(p)*_d(q) for p,q in fd["bids"][:self.config.depth_levels]), Decimal("0")) + sum((_d(p)*_d(q) for p,q in fd["asks"][:self.config.depth_levels]), Decimal("0"))
                         weights = RankingWeights(
                             net_edge=_d(self.config.score_weight_net_edge),
                             funding_consistency=_d(self.config.score_weight_funding_consistency),
@@ -348,8 +350,6 @@ class MarketScanner:
                         score = score_factors["score"]
                         if next_funding <= now or stats["count"] == 0 or net <= _d(self.config.min_net_edge_usdt):
                             self._reject(symbol, "funding history absent/expired or estimated net edge below threshold", now); continue
-                        spot_visible_depth = sum((_d(p)*_d(q) for p,q in sd["bids"][:self.config.depth_levels]), Decimal("0")) + sum((_d(p)*_d(q) for p,q in sd["asks"][:self.config.depth_levels]), Decimal("0"))
-                        futures_visible_depth = sum((_d(p)*_d(q) for p,q in fd["bids"][:self.config.depth_levels]), Decimal("0")) + sum((_d(p)*_d(q) for p,q in fd["asks"][:self.config.depth_levels]), Decimal("0"))
                         # All candidate opportunities pass this one final, shared gate.
                         state = self.market_hub.states.get(symbol) if self.market_hub else None
                         required_fields = ("spot_bid", "spot_ask", "spot_last", "spot_quote_volume",
