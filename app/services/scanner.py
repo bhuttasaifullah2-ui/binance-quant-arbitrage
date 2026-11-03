@@ -33,4 +33,4 @@ def build_opportunity(symbol: str, funding_rate: Decimal, notional: Decimal,
     return Opportunity(symbol, funding_rate, notional, estimate.gross_funding,
                        estimate.entry_fees + estimate.exit_fees, estimate.slippage,
                        estimate.expected_net, status, "; ".join(reasons) or
-                       "Passed shared eligibility gate; theoretical only, no execution");
+                       "Passed shared eligibility gate; theoretical only, no execution")
