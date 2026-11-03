@@ -94,6 +94,8 @@ class ValidationStore:
                 if old is None:
                     if row is not None:
                         changes.append(("OPPORTUNITY_APPEARED", {"current": current}))
+                    elif current["rejection_codes"]:
+                        changes.append(("REJECTION_REASONS_CHANGED", {"previous": [], "current": current["rejection_codes"]}))
                 else:
                     if not old.get("active") and row is not None:
                         changes.append(("OPPORTUNITY_APPEARED", {"current": current}))
@@ -150,6 +152,13 @@ class ValidationStore:
         for item in events:
             counts[item["event_type"]] = counts.get(item["event_type"], 0) + 1
         payloads = [json.loads(item["payload"]) for item in snapshots]
+        rejection_counts: dict[str, int] = {}
+        for event in events:
+            if event["event_type"] in {"REJECTION_REASONS_CHANGED", "ELIGIBILITY_CHANGED"}:
+                detail = json.loads(event["payload"])
+                codes = detail.get("current") if isinstance(detail.get("current"), list) else []
+                for code in codes:
+                    rejection_counts[str(code)] = rejection_counts.get(str(code), 0) + 1
 
         def distribution(key: str) -> dict[str, Any]:
             values = []
@@ -229,6 +238,8 @@ class ValidationStore:
             "basis_bps_distribution": distribution("basis_bps"),
             "spot_depth_distribution": distribution("spot_depth_usdt"),
             "futures_depth_distribution": distribution("futures_depth_usdt"),
+            "data_freshness_age_ms_distribution": distribution("max_field_age_ms"),
+            "rejection_reason_counts": rejection_counts,
             "websocket_uptime": uptime,
             "average_recovery_duration_ms": None if not recovery_durations else sum(recovery_durations) / len(recovery_durations),
             "maximum_recovery_duration_ms": max(recovery_durations) if recovery_durations else None,
