@@ -1,4 +1,3 @@
-from decimal import Decimal
 import pytest
 
 from app.domain.scanner_eligibility import validate_scanner_eligibility
