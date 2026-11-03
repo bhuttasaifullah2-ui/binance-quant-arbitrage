@@ -145,8 +145,12 @@ async def lifespan(app: FastAPI):
             except Exception:
                 logger.exception("Periodic public exchange clock synchronization failed")
     clock_task = asyncio.create_task(clock_sync_loop(), name="binance-clock-sync") if not settings.live_validation_enabled else None
+    session_status = "COMPLETED"
     try:
         yield
+    except BaseException:
+        session_status = "FAILED"
+        raise
     finally:
         scanner.stop()
         if validation_task:
@@ -174,7 +178,7 @@ async def lifespan(app: FastAPI):
                 await ws_task
             except asyncio.CancelledError:
                 pass
-        validation_store.close_session("COMPLETED")
+        validation_store.close_session(session_status)
         await client.close()
 
 
