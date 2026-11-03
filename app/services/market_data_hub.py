@@ -5,10 +5,11 @@ from app.domain.market_data import SymbolMarketState
 
 
 class MarketDataHub:
-    def __init__(self, max_clock_skew_ms: int = 5000):
+    def __init__(self, max_clock_skew_ms: int = 5000, max_event_delay_ms: int = 15000):
         self.states: dict[str, SymbolMarketState] = {}
         self.symbols: set[str] = set()
         self.max_clock_skew_ms = max_clock_skew_ms
+        self.max_event_delay_ms = max_event_delay_ms
         self.clock_offsets_ms: dict[str, int] = {}
         self.clock_sync_at_ms: int | None = None
         self.health: dict[str, dict[str, Any]] = {}
@@ -55,6 +56,9 @@ class MarketDataHub:
             return False
         if event_ms > now + self.max_clock_skew_ms:
             self.quality_events.append({"symbol": symbol, "reason": "future_event_timestamp", "event_time_ms": event_ms})
+            return False
+        if now - event_ms > self.max_event_delay_ms:
+            self.quality_events.append({"symbol": symbol, "reason": "delayed_event", "event_time_ms": event_ms})
             return False
         values: dict[str, Any] = {}
         stream_name = stream.lower()
