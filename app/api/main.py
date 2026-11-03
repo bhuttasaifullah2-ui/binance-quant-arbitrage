@@ -88,11 +88,11 @@ async def spot_market(request: Request, limit: int = Query(100, ge=1, le=500), o
 @app.get("/api/v1/market/futures")
 async def futures_market(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
     store = request.app.state.market_store
-    return {"items": store.latest(limit), "limit": limit}
+    return {"items": store.latest(limit, offset), "limit": limit, "offset": offset}
 
 @app.get("/api/v1/funding/current")
 async def current_funding(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
-    return {"items": request.app.state.market_store.latest(limit), "limit": limit}
+    return {"items": request.app.state.market_store.latest(limit, offset), "limit": limit, "offset": offset}
 
 @app.get("/api/v1/funding/history/{symbol}")
 async def funding_history(request: Request, symbol: str, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
