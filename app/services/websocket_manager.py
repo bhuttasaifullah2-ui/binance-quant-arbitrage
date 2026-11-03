@@ -13,13 +13,20 @@ logger = logging.getLogger(__name__)
 class BinanceWebSocketManager:
     def __init__(self, hub: MarketDataHub, spot_url: str, futures_url: str,
                  recovery: Callable[[list[str]], Awaitable[None]] | None = None,
-                 streams_per_connection: int = 400):
+                 streams_per_connection: int = 400,
+                 health_sink: Callable[[str, dict[str, Any], int], None] | None = None):
         self.hub, self.spot_url, self.futures_url = hub, spot_url, futures_url
         self.recovery = recovery
+        self.health_sink = health_sink
         self.streams_per_connection = max(20, streams_per_connection)
         self._stop = asyncio.Event()
         self._changed = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
+
+    def _set_health(self, market: str, value: dict[str, Any]) -> None:
+        self.hub.health[market] = value
+        if self.health_sink:
+            self.health_sink(market, value, int(time.time()*1000))
 
     def set_symbols(self, symbols: set[str]) -> None:
         normalized = {s.lower() for s in symbols}
@@ -47,7 +54,7 @@ class BinanceWebSocketManager:
             try:
                 async with websockets.connect(endpoint, ping_interval=20, ping_timeout=20,
                                                close_timeout=5, max_size=2**20) as ws:
-                    self.hub.health[market] = {"connected": True, "streams": len(streams)}
+                    self._set_health(market, {"connected": True, "streams": len(streams)})
                     if self.recovery:
                         await self.recovery(sorted({x.split("@", 1)[0].upper() for x in streams}))
                     delay = 1.0
@@ -62,12 +69,14 @@ class BinanceWebSocketManager:
                             accepted = self.hub.apply_message(message)
                             if accepted:
                                 self.hub.health[market]["last_event_ms"] = int(time.time()*1000)
+                                if self.health_sink:
+                                    self.health_sink(market, self.hub.health[market], int(time.time()*1000))
                         except (ValueError, TypeError):
                             logger.exception("Invalid %s websocket event", market)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                self.hub.health[market] = {"connected": False, "error": type(exc).__name__}
+                self._set_health(market, {"connected": False, "error": type(exc).__name__})
                 logger.warning("%s websocket reconnecting after %s", market, type(exc).__name__)
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=delay)
