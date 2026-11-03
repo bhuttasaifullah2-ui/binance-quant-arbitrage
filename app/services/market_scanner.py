@@ -76,6 +76,18 @@ class MarketScanner:
         return list(self._rejections)
 
     def _reject(self, symbol: str, reason: str, now_ms: int, code: str = "SCANNER_FILTER_REJECTED") -> None:
+        if code == "SCANNER_FILTER_REJECTED":
+            text = reason.lower()
+            if "missing" in text or "malformed" in text:
+                code = "MARKET_FIELDS_MISSING"
+            elif "stale" in text:
+                code = "MARKET_DATA_STALE"
+            elif "depth" in text or "volume" in text or "liquidity" in text:
+                code = "ORDERBOOK_LIQUIDITY_INSUFFICIENT"
+            elif "funding" in text:
+                code = "FUNDING_HISTORY_INCONSISTENT"
+            elif "hedge" in text or "filter" in text:
+                code = "HEDGE_FILTER_VALIDATION_FAILED"
         item = {"symbol": symbol, "reason": reason, "explanation": reason,
                 "rejection_code": code, "rejection_codes": [code], "event_time_ms": now_ms,
                 "eligible": False, "status": "REJECTED"}
