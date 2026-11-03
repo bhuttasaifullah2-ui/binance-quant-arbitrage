@@ -142,13 +142,13 @@ class LiveValidationService:
             "status":"HEALTHY" if symbols and stale_count<=self.max_stale_symbols and all(x["eligible"] for x in symbols.values()) else "WARNING"}
     async def validate_funding(self, symbol: str = "BTCUSDT") -> dict[str, Any]:
         from app.domain.funding import detect_funding_interval_hours, funding_history_gaps
-        from app.exchange.binance.funding_history import fetch_funding_history
+        from app.exchange.binance.funding_history import fetch_funding_history, fetch_funding_history_with_stats
 
         symbol = symbol.upper()
         now = int(time.time() * 1000)
         current = await self.client.futures_premium_index()
         item = next((x for x in current if x.get("symbol") == symbol), None)
-        rows = await fetch_funding_history(self.client, symbol, page_size=1000, max_pages=10)
+        rows, duplicate_count = await fetch_funding_history_with_stats(self.client, symbol, page_size=1000, max_pages=10)
         timestamp_errors = []
         by_time: dict[int, dict[str, Any]] = {}
         for row in rows:
@@ -174,9 +174,10 @@ class LiveValidationService:
             missing_start = gap_start + interval * 3600000
             missing_end = gap_end - 1
             if missing_start <= missing_end:
-                backfill = await fetch_funding_history(
+                backfill, backfill_duplicates = await fetch_funding_history_with_stats(
                     self.client, symbol, start_time_ms=missing_start,
                     end_time_ms=missing_end, page_size=1000, max_pages=5)
+                duplicate_count += backfill_duplicates
                 for row in backfill:
                     try:
                         stamp = int(row["fundingTime"])
@@ -207,7 +208,7 @@ class LiveValidationService:
             "current_vs_latest_historical_match": None if current_rate is None or latest_realized is None else not mismatch,
             "next_funding_time_ms": next_time,
             "historical_realized_count": len(ordered),
-            "duplicate_interval_count": len(rows) - len({int(x["fundingTime"]) for x in rows if x.get("fundingTime") is not None}),
+            "duplicate_interval_count": duplicate_count,
             "funding_interval_hours_estimate": interval,
             "resolved_gap_count": len(gaps) - len(unresolved),
             "unresolved_gaps": [{"previous_settlement_ms": a, "next_settlement_ms": b} for a, b in unresolved],
