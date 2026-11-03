@@ -166,10 +166,23 @@ class ValidationStore:
                 scan_params.append(end_ms)
             scan_where = (" WHERE " + " AND ".join(scan_clauses)) if scan_clauses else ""
             scans = db.execute("SELECT * FROM observation_scans" + scan_where + " ORDER BY completed_at_ms", scan_params).fetchall()
+            funding_clauses = ["category='funding_reconciliation'"]
+            funding_params: list[Any] = []
+            if start_ms is not None:
+                funding_clauses.append("checked_at_ms>=?")
+                funding_params.append(start_ms)
+            if end_ms is not None:
+                funding_clauses.append("checked_at_ms<?")
+                funding_params.append(end_ms)
+            funding_rows = db.execute("SELECT status,payload FROM validation_samples WHERE " +
+                " AND ".join(funding_clauses) + " ORDER BY checked_at_ms", funding_params).fetchall()
         counts: dict[str, int] = {}
         for item in events:
             counts[item["event_type"]] = counts.get(item["event_type"], 0) + 1
         payloads = [json.loads(item["payload"]) for item in snapshots]
+        funding_payloads = [json.loads(item["payload"]) for item in funding_rows]
+        unresolved_funding_gaps = sum(len(item.get("unresolved_gaps", [])) for item in funding_payloads)
+        funding_duplicate_count = sum(int(item.get("duplicate_interval_count", 0)) for item in funding_payloads)
         rejection_counts: dict[str, int] = {}
         for event in events:
             if event["event_type"] in {"REJECTION_REASONS_CHANGED", "ELIGIBILITY_CHANGED"}:
@@ -294,8 +307,15 @@ class ValidationStore:
             "websocket_uptime": uptime,
             "average_recovery_duration_ms": None if not recovery_durations else sum(recovery_durations) / len(recovery_durations),
             "maximum_recovery_duration_ms": max(recovery_durations) if recovery_durations else None,
-            "data_gaps": {"scanner_intervals": scan_gaps, "count": len(scan_gaps),
-                          "funding_gaps_are_reported_by_funding_reconciliation": True},
+            "funding_reconciliation": {
+                "sample_count": len(funding_payloads),
+                "warning_count": sum(1 for row in funding_rows if row["status"] != "HEALTHY"),
+                "duplicate_settlement_count": funding_duplicate_count,
+                "unresolved_gap_count": unresolved_funding_gaps,
+                "unresolved_gaps": [gap for item in funding_payloads for gap in item.get("unresolved_gaps", [])],
+            },
+            "data_gaps": {"scanner_intervals": scan_gaps, "scanner_gap_count": len(scan_gaps),
+                          "unresolved_funding_gap_count": unresolved_funding_gaps},
             "observed_data_only": True,
             "actual_trading_performance": "NONE — public read-only; no orders placed",
         }
