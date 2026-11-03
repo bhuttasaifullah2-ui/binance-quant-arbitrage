@@ -9,7 +9,7 @@ from app.domain.funding import summarize_funding, detect_funding_interval_hours,
 from app.domain.market_quality import basis_bps, spread_bps
 from app.domain.models import FundingObservation
 from app.domain.orderbook import estimate_vwap
-from app.domain.ranking import score_opportunity, RankingWeights
+from app.domain.ranking import score_opportunity_breakdown, RankingWeights
 from app.exchange.binance.funding_history import fetch_funding_history
 from app.exchange.binance.public_client import BinancePublicClient
 from app.infrastructure.sqlite_store import SQLiteMarketStore
@@ -275,8 +275,10 @@ class MarketScanner:
                             liquidity=_d(self.config.score_weight_liquidity), spread=_d(self.config.score_weight_spread),
                             slippage=_d(self.config.score_weight_slippage), basis=_d(self.config.score_weight_basis),
                             freshness=_d(self.config.score_weight_freshness),
-                            funding_volatility=_d(self.config.score_weight_funding_volatility))
-                        score = score_opportunity(
+                            funding_volatility=_d(self.config.score_weight_funding_volatility),
+                            hedge_precision=_d(self.config.score_weight_hedge_precision),
+                            residual_exposure=_d(self.config.score_weight_residual_exposure))
+                        score_factors = score_opportunity_breakdown(
                             net_edge_usdt=net, funding_positive_fraction=stats["positive_fraction"],
                             funding_volatility=stats["volatility"],
                             spot_depth_usdt=spot_buy.quote_notional + spot_sell.quote_notional,
@@ -287,7 +289,12 @@ class MarketScanner:
                             max_data_age_seconds=Decimal(self.config.max_data_age_seconds),
                             min_depth_usdt=notional, max_spread_bps=_d(self.config.ranking_max_spread_bps),
                             max_slippage_bps=_d(self.config.ranking_max_slippage_bps),
-                            max_basis_bps=_d(self.config.ranking_max_basis_bps), weights=weights)
+                            max_basis_bps=_d(self.config.ranking_max_basis_bps), weights=weights,
+                            hedge_mismatch_fraction=hedge["mismatch_fraction"],
+                            max_hedge_mismatch=_d(self.config.max_hedge_mismatch),
+                            residual_exposure_usdt=hedge["residual_directional_exposure"],
+                            max_residual_exposure_usdt=notional*_d(self.config.max_hedge_mismatch))
+                        score = score_factors["score"]
                         if next_funding <= now or stats["count"] == 0 or net <= _d(self.config.min_net_edge_usdt):
                             self._reject(symbol, "funding history absent/expired or estimated net edge below threshold", now); continue
                         row = {"symbol": symbol, "spot_bid": spot_bid, "spot_ask": spot_ask,
@@ -334,7 +341,8 @@ class MarketScanner:
                             "rejection_reasons": [], "risk_warnings": (["Funding and exit basis are estimates; no execution guarantee."] +
                                               (["Historical funding data has gaps."] if history_gaps else [])),
                             "funding_history_gap_count": len(history_gaps),
-                            "scoring_factors": {
+                            "scoring_factors": {k: str(v) for k, v in score_factors.items()},
+                            "funding_metrics": {
                                 "funding_positive_fraction": str(stats["positive_fraction"]),
                                 "funding_volatility": str(stats["volatility"]),
                                 "spot_depth_usdt": str(row["spot_depth_usdt"]),
