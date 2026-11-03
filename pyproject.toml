@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "binance-quant-arbitrage"
-version = "0.2.0"
-description = "Read-only Binance funding arbitrage market intelligence engine"
+version = "0.3.0"
+description = "Read-only Binance funding arbitrage market intelligence engine with normalized public WebSocket data"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1",
