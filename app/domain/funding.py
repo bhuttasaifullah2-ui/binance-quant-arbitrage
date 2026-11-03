@@ -1,5 +1,4 @@
 from decimal import Decimal, ROUND_HALF_UP
-from statistics import median
 from .models import FundingObservation
 
 
@@ -66,6 +65,20 @@ def detect_funding_interval_hours(funding_times_ms: list[int], default_hours: in
     gaps = [b - a for a, b in zip(ordered, ordered[1:]) if b > a]
     if not gaps:
         return default_hours
-    hours = (Decimal(str(median(gaps))) / Decimal("3600000")).to_integral_value(rounding=ROUND_HALF_UP)
+    ordered_gaps = sorted(gaps)
+    mid = len(ordered_gaps) // 2
+    median_gap = (Decimal(ordered_gaps[mid]) if len(ordered_gaps) % 2
+                  else Decimal(ordered_gaps[mid-1] + ordered_gaps[mid]) / 2)
+    hours = (median_gap / Decimal("3600000")).to_integral_value(rounding=ROUND_HALF_UP)
     result = int(hours)
     return result if 1 <= result <= 24 else default_hours
+
+
+def funding_history_gaps(observations: list[FundingObservation], interval_hours: int,
+                         tolerance_ms: int = 60000) -> list[tuple[int, int]]:
+    """Return adjacent settlement gaps that exceed the expected interval plus tolerance."""
+    if interval_hours <= 0:
+        raise ValueError("interval_hours must be positive")
+    ordered = sorted({x.funding_time_ms for x in observations})
+    expected = interval_hours * 3600000
+    return [(a, b) for a, b in zip(ordered, ordered[1:]) if b-a > expected+tolerance_ms]
