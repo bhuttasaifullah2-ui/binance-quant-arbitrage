@@ -8,7 +8,7 @@ from app.domain.exchange_filters import SymbolFilters, matched_valid_hedge
 from app.domain.funding import summarize_funding, detect_funding_interval_hours, funding_history_gaps
 from app.domain.market_quality import basis_bps, spread_bps
 from app.domain.models import FundingObservation
-from app.domain.orderbook import estimate_vwap
+from app.domain.orderbook import estimate_vwap, estimate_vwap_quantity
 from app.domain.ranking import score_opportunity_breakdown, RankingWeights
 from app.exchange.binance.funding_history import fetch_funding_history
 from app.exchange.binance.public_client import BinancePublicClient
@@ -247,19 +247,34 @@ class MarketScanner:
                                                     _d(self.config.max_hedge_mismatch))
                         if not hedge["executable"]:
                             self._reject(symbol, ";".join(hedge["reasons"]), now); continue
-                        spot_buy = estimate_vwap(sd["asks"], hedge["spot_notional"], "buy")
-                        spot_sell = estimate_vwap(sd["bids"], hedge["spot_notional"], "sell")
-                        fut_sell = estimate_vwap(fd["bids"], hedge["futures_notional"], "sell")
-                        fut_buy = estimate_vwap(fd["asks"], hedge["futures_notional"], "buy")
+                        spot_buy = estimate_vwap_quantity(sd["asks"], hedge["spot_quantity"], "buy")
+                        spot_sell = estimate_vwap_quantity(sd["bids"], hedge["spot_quantity"], "sell")
+                        fut_sell = estimate_vwap_quantity(fd["bids"], hedge["futures_quantity"], "sell")
+                        fut_buy = estimate_vwap_quantity(fd["asks"], hedge["futures_quantity"], "buy")
                         executions = [spot_buy, spot_sell, fut_sell, fut_buy]
                         if any(x is None or not x.complete for x in executions):
                             self._reject(symbol, "insufficient order-book depth for configured notional", now); continue
+                        spot_entry_notional, futures_entry_notional = spot_buy.quote_notional, fut_sell.quote_notional
+                        spot_exit_notional, futures_exit_notional = spot_sell.quote_notional, fut_buy.quote_notional
+                        actual_denominator = max(spot_entry_notional, futures_entry_notional)
+                        actual_mismatch = (abs(spot_entry_notional-futures_entry_notional)/actual_denominator
+                                           if actual_denominator else Decimal("1"))
+                        actual_validation = (list(spot_filter.validate(hedge["spot_quantity"], spot_buy.vwap))
+                                             + list(futures_filter.validate(hedge["futures_quantity"], fut_sell.vwap)))
+                        if actual_mismatch > _d(self.config.max_hedge_mismatch) or actual_validation:
+                            self._reject(symbol, ";".join(actual_validation) or "actual VWAP hedge mismatch exceeds limit", now); continue
+                        hedge["spot_notional"] = spot_entry_notional
+                        hedge["futures_notional"] = futures_entry_notional
+                        hedge["hedge_ratio"] = futures_entry_notional / spot_entry_notional
+                        hedge["residual_directional_exposure"] = spot_entry_notional-futures_entry_notional
+                        hedge["mismatch_fraction"] = actual_mismatch
                         slips = [x.slippage_bps for x in executions if x is not None]
-                        matched_notional = min(hedge["spot_notional"], hedge["futures_notional"])
+                        matched_notional = min(spot_entry_notional, futures_entry_notional)
                         gross_funding = matched_notional * funding
-                        entry_fees = (hedge["spot_notional"] * _d(self.config.spot_taker_fee_rate)
-                                      + hedge["futures_notional"] * _d(self.config.futures_taker_fee_rate))
-                        exit_fees = entry_fees
+                        entry_fees = (spot_entry_notional * _d(self.config.spot_taker_fee_rate)
+                                      + futures_entry_notional * _d(self.config.futures_taker_fee_rate))
+                        exit_fees = (spot_exit_notional * _d(self.config.spot_taker_fee_rate)
+                                     + futures_exit_notional * _d(self.config.futures_taker_fee_rate))
                         slippage_cost = sum((x.quote_notional * x.slippage_bps / Decimal("10000")
                                              for x in executions if x is not None), Decimal("0"))
                         if new_history:
@@ -359,7 +374,7 @@ class MarketScanner:
                             "residual_directional_exposure": str(hedge["residual_directional_exposure"]),
                             "hedge_executable": True, "hedge_validation_reasons": [],
                             "break_even_funding_rate": str(break_even),
-                            "expected_holding_period_return_pct": str(net/notional*100),
+                            "expected_holding_period_return_pct": str(net/matched_notional*100),
                             "holding_period_assumption": "one next funding interval",
                             "gross_funding_usdt": str(gross_funding),
                             "estimated_fees_usdt": str(entry_fees + exit_fees),
