@@ -142,10 +142,14 @@ class MarketScanner:
                 self.last_pair_count = len(common)
                 if self.websocket_manager is not None and self.config.websocket_enabled:
                     self.websocket_manager.set_symbols(set(common))
-                ws_ready = bool(self.config.websocket_enabled and self.market_hub and
+                ws_fields = ("spot_bid", "spot_ask", "spot_last", "spot_quote_volume",
+                             "futures_bid", "futures_ask", "futures_last", "futures_quote_volume",
+                             "futures_mark", "futures_index", "funding_rate", "next_funding_time_ms")
+                ws_ready = bool(self.config.websocket_enabled and self.market_hub and common and
                                 all(s in self.market_hub.states and
-                                    "spot_bid" in self.market_hub.states[s].fields and
-                                    "futures_mark" in self.market_hub.states[s].fields for s in common))
+                                    all(field in self.market_hub.states[s].fields and
+                                        self.market_hub.states[s].fields[field].source == "websocket"
+                                        for field in ws_fields) for s in common))
                 rest_snapshot_ms: int | None = None
                 if ws_ready:
                     spot_t, spot_b, fut_t, fut_b, prem = self._hub_maps(common, int(time.time()*1000))
