@@ -54,6 +54,7 @@ class MarketScanner:
         self._futures_info: dict[str, Any] | None = None
         self.clock_offset_ms = 0
         self._observed_symbols: set[str] = set()
+        self._ws_bootstrap_done = False
 
     @property
     def opportunities(self) -> list[dict[str, Any]]:
@@ -114,6 +115,7 @@ class MarketScanner:
         for symbol in common:
             state = self.market_hub.states.get(symbol) if self.market_hub else None
             if state is None:
+                self._reject(symbol, "missing normalized market state", now)
                 continue
             snap = self.market_hub.pair_snapshot(symbol) or {}
             freshness = state.freshness(now, max_age, (
@@ -143,14 +145,7 @@ class MarketScanner:
                 self.last_pair_count = len(common)
                 if self.websocket_manager is not None and self.config.websocket_enabled:
                     self.websocket_manager.set_symbols(set(common))
-                ws_fields = ("spot_bid", "spot_ask", "spot_last", "spot_quote_volume",
-                             "futures_bid", "futures_ask", "futures_last", "futures_quote_volume",
-                             "futures_mark", "futures_index", "funding_rate", "next_funding_time_ms")
-                ws_ready = bool(self.config.websocket_enabled and self.market_hub and common and
-                                all(s in self.market_hub.states and
-                                    all(field in self.market_hub.states[s].fields and
-                                        self.market_hub.states[s].fields[field].source == "websocket"
-                                        for field in ws_fields) for s in common))
+                ws_ready = bool(self.config.websocket_enabled and self.market_hub and self._ws_bootstrap_done)
                 rest_snapshot_ms: int | None = None
                 if ws_ready:
                     spot_t, spot_b, fut_t, fut_b, prem = self._hub_maps(common, int(time.time()*1000))
@@ -167,6 +162,8 @@ class MarketScanner:
                     fut_b = {x["symbol"]: x for x in fut_books if x.get("symbol") in common}
                     prem = {x["symbol"]: x for x in premium if x.get("symbol") in common}
                     self._rest_seed(common, spot_t, spot_b, fut_t, fut_b, prem, rest_started)
+                    if self.config.websocket_enabled and self.market_hub:
+                        self._ws_bootstrap_done = True
                 spot_meta = {x["symbol"]: x for x in spot_info.get("symbols", [])}
                 futures_meta = {x["symbol"]: x for x in fut_info.get("symbols", [])}
                 prelim = []
@@ -300,15 +297,18 @@ class MarketScanner:
                         basis_penalty = abs(bps)/Decimal("10000")*matched_notional*_d(self.config.basis_risk_haircut)
                         net = gross_funding - entry_fees - exit_fees - slippage_cost - basis_penalty
                         age_ms = 0
+                        data_source = "binance_rest"
                         if self.config.websocket_enabled and self.market_hub:
                             state = self.market_hub.states.get(symbol)
                             required = ("spot_bid", "spot_ask", "spot_last", "spot_quote_volume",
-                                        "futures_bid", "futures_ask", "futures_mark", "futures_index",
-                                        "funding_rate", "next_funding_time_ms")
+                                        "futures_bid", "futures_ask", "futures_last", "futures_quote_volume",
+                                        "futures_mark", "futures_index", "funding_rate", "next_funding_time_ms")
                             quality = state.freshness(now, self.config.max_data_age_seconds*1000, required) if state else {"valid": False, "ages_ms": {}, "reasons": ["missing state"]}
                             if not quality["valid"]:
                                 self._reject(symbol, ";".join(quality["reasons"]), now); continue
                             age_ms = max((x for x in quality["ages_ms"].values() if x is not None), default=0)
+                            sources = {state.fields[k].source for k in required if k in state.fields}
+                            data_source = "binance_ws" if sources == {"websocket"} else "binance_rest_recovery"
                         else:
                             age_ms = max(0, now - (rest_snapshot_ms or now))
                             if age_ms > self.config.max_data_age_seconds*1000:
@@ -353,7 +353,7 @@ class MarketScanner:
                                "futures_depth_usdt": futures_visible_depth,
                                "spot_slippage_bps": spot_buy.slippage_bps + spot_sell.slippage_bps,
                                "futures_slippage_bps": fut_sell.slippage_bps + fut_buy.slippage_bps,
-                               "basis_bps": bps, "observed_at_ms": now, "source": "binance_ws" if ws_ready else "binance_rest"}
+                               "basis_bps": bps, "observed_at_ms": now, "source": data_source}
                         self.store.save_observation(row)
                         break_even = (entry_fees + exit_fees + slippage_cost + basis_penalty) / matched_notional
                         out.append({
@@ -389,7 +389,7 @@ class MarketScanner:
                             "data_freshness": "FRESH", "max_field_age_ms": age_ms,
                             "field_timestamps_ms": ({} if not self.market_hub or not ws_ready else {
                                 k: v.received_at_ms for k, v in self.market_hub.states[symbol].fields.items()}),
-                            "source": "binance_ws" if ws_ready else "binance_rest",
+                            "source": data_source,
                             "rejection_reasons": [], "risk_warnings": (["Funding and exit basis are estimates; no execution guarantee."] +
                                               (["Historical funding data has gaps."] if history_gaps else [])),
                             "funding_history_gap_count": len(history_gaps),
