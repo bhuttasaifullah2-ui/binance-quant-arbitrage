@@ -103,6 +103,10 @@ def validate_scanner_eligibility(
         reject("CLOCK_DRIFT_EXCEEDED", "Exchange clock offset exceeds configured limit: " + ", ".join(bad_clock))
     if context.get("clock_sync_required") and any(offsets.get(name) is None for name in ("spot", "futures")):
         reject("CLOCK_SYNC_UNAVAILABLE", "Spot and Futures clock synchronization is required but unavailable")
+    sync_age = context.get("clock_sync_age_ms")
+    max_sync_age = int(context.get("max_clock_sync_age_ms", 300000))
+    if context.get("clock_sync_required") and (sync_age is None or int(sync_age) > max_sync_age):
+        reject("CLOCK_SYNC_STALE", "Exchange clock synchronization is missing or older than the configured maximum age")
 
     if not context.get("spot_filters_valid", False) or not context.get("futures_filters_valid", False):
         reject("EXCHANGE_FILTERS_INVALID", "Spot or Futures exchange filters are unavailable or invalid")
