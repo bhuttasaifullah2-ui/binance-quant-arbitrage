@@ -2,6 +2,7 @@
 import json
 import sqlite3
 from pathlib import Path
+from decimal import Decimal
 from typing import Any
 
 
