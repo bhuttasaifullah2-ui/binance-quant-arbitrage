@@ -1,6 +1,7 @@
 """Sharded public Binance combined-stream supervisor with dynamic symbol refresh."""
 import asyncio
 import logging
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 import websockets
@@ -47,7 +48,7 @@ class BinanceWebSocketManager:
                                                close_timeout=5, max_size=2**20) as ws:
                     self.hub.health[market] = {"connected": True, "streams": len(streams)}
                     if self.recovery:
-                        await self.recovery([x.split("@", 1)[0].upper() for x in streams])
+                        await self.recovery(sorted({x.split("@", 1)[0].upper() for x in streams}))
                     delay = 1.0
                     async for raw in ws:
                         if self._stop.is_set():
@@ -59,7 +60,7 @@ class BinanceWebSocketManager:
                                 message["_market"] = market
                             accepted = self.hub.apply_message(message)
                             if accepted:
-                                self.hub.health[market]["last_event_ms"] = int(asyncio.get_running_loop().time()*1000)
+                                self.hub.health[market]["last_event_ms"] = int(time.time()*1000)
                         except (ValueError, TypeError):
                             logger.exception("Invalid %s websocket event", market)
             except asyncio.CancelledError:
