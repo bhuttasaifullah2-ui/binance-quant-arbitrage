@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from app.domain.exchange_filters import SymbolFilters, matched_valid_hedge
-from app.domain.funding import summarize_funding, detect_funding_interval_hours
+from app.domain.funding import summarize_funding, detect_funding_interval_hours, funding_history_gaps
 from app.domain.market_quality import basis_bps, spread_bps
 from app.domain.models import FundingObservation
 from app.domain.orderbook import estimate_vwap
@@ -249,6 +249,9 @@ class MarketScanner:
                                 funding_obs.append(FundingObservation(symbol, _d(rate), int(stamp)))
                         stats = summarize_funding(funding_obs)
                         funding_interval = detect_funding_interval_hours([x.funding_time_ms for x in funding_obs])
+                        history_gaps = funding_history_gaps(funding_obs, funding_interval)
+                        if history_gaps:
+                            self._reject(symbol, f"historical funding gaps detected:{len(history_gaps)}", now)
                         bps = basis_bps(spot_ask, mark)
                         basis_penalty = abs(bps)/Decimal("10000")*notional*_d(self.config.basis_risk_haircut)
                         net = gross_funding - entry_fees - exit_fees - slippage_cost - basis_penalty
@@ -328,7 +331,9 @@ class MarketScanner:
                             "field_timestamps_ms": ({} if not self.market_hub or not ws_ready else {
                                 k: v.received_at_ms for k, v in self.market_hub.states[symbol].fields.items()}),
                             "source": "binance_ws" if ws_ready else "binance_rest",
-                            "rejection_reasons": [], "risk_warnings": ["Funding and exit basis are estimates; no execution guarantee."],
+                            "rejection_reasons": [], "risk_warnings": (["Funding and exit basis are estimates; no execution guarantee."] +
+                                              (["Historical funding data has gaps."] if history_gaps else [])),
+                            "funding_history_gap_count": len(history_gaps),
                             "scoring_factors": {
                                 "funding_positive_fraction": str(stats["positive_fraction"]),
                                 "funding_volatility": str(stats["volatility"]),
