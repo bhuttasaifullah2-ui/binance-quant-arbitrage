@@ -65,3 +65,20 @@ def test_funding_reconciliation_keeps_unresolved_gaps_explicit(tmp_path):
     assert result["status"] == "WARNING"
     assert result["unresolved_gaps"]
     assert result["missing_intervals_are_not_zero"] is True
+
+
+
+def test_funding_reconciliation_flags_current_vs_historical_mismatch(tmp_path):
+    now = int(time.time() * 1000)
+    rows = [{"fundingTime": now - 8 * 3600000, "fundingRate": "0.0001"},
+            {"fundingTime": now, "fundingRate": "0.0001"}]
+    client = FundingClient(rows, [])
+    async def mismatched_premium():
+        return [{"symbol": "BTCUSDT", "lastFundingRate": "0.005",
+                 "nextFundingTime": int(time.time() * 1000) + 3600000}]
+    client.futures_premium_index = mismatched_premium
+    service = LiveValidationService(client, Dummy(), Dummy(),
+                                    ValidationStore(str(tmp_path / "mismatch.sqlite3")))
+    result = asyncio.run(service.validate_funding("BTCUSDT"))
+    assert result["status"] == "WARNING"
+    assert result["current_vs_latest_historical_match"] is False
