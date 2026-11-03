@@ -190,14 +190,31 @@ class MarketScanner:
                         depth_tasks = [self.client.spot_depth(symbol, self.config.orderbook_limit),
                                        self.client.futures_depth(symbol, self.config.orderbook_limit),
                                        self.client.futures_open_interest(symbol)]
-                        if item[0] in history_symbols:
+                        async def history_fetch():
+                            if symbol not in history_symbols:
+                                return []
                             latest = self.store.latest_funding_time(symbol)
-                            history_tasks = [fetch_funding_history(
+                            rows = await fetch_funding_history(
                                 self.client, symbol, start_time_ms=None if latest is None else latest + 1,
                                 page_size=min(self.config.history_limit, 1000),
-                                max_pages=self.config.funding_history_max_pages)]
-                        else:
-                            history_tasks = [asyncio.sleep(0, result=[])]
+                                max_pages=self.config.funding_history_max_pages)
+                            existing = self.store.funding_history(symbol, self.config.history_limit)
+                            existing_obs = [FundingObservation(symbol, _d(x["funding_rate"]), int(x["funding_time_ms"]))
+                                            for x in existing]
+                            if existing_obs:
+                                interval = detect_funding_interval_hours([x.funding_time_ms for x in existing_obs])
+                                gaps = funding_history_gaps(existing_obs, interval)
+                                if gaps:
+                                    gap_start, gap_end = gaps[0]
+                                    backfill = await fetch_funding_history(
+                                        self.client, symbol,
+                                        start_time_ms=gap_start + interval*3600000,
+                                        end_time_ms=gap_end-1,
+                                        page_size=min(self.config.history_limit, 1000),
+                                        max_pages=self.config.funding_history_max_pages)
+                                    rows.extend(backfill)
+                            return rows
+                        history_tasks = [history_fetch()]
                         return await asyncio.gather(*depth_tasks, *history_tasks)
 
                 history_symbols = {x[0] for x in detailed[:self.config.max_history_symbols_per_cycle]}
