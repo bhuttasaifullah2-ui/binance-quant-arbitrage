@@ -1,4 +1,5 @@
 """Read-only Phase 2.2 validation and observation API routes."""
+from datetime import date, datetime, time, timezone
 from fastapi import APIRouter, HTTPException, Query, Request
 router=APIRouter()
 def _service(request: Request):
@@ -40,3 +41,29 @@ async def observation_events(request: Request,limit: int=Query(200,ge=1,le=2000)
 @router.get("/api/v1/observation/report")
 async def observation_report(request: Request):
     return request.app.state.validation_store.report()
+
+
+@router.get("/api/v1/scanner/eligibility")
+async def scanner_eligibility(request: Request):
+    scanner = request.app.state.market_scanner
+    return {
+        "checked_at_ms": scanner.last_scan_ms,
+        "decisions": scanner._eligibility_decisions,
+        "eligible_count": sum(1 for x in scanner._eligibility_decisions.values() if x.get("eligible")),
+        "rejected_count": sum(1 for x in scanner._eligibility_decisions.values() if not x.get("eligible")),
+        "source": "same final eligibility gate used by MarketScanner",
+    }
+
+
+@router.get("/api/v1/observation/report/cumulative")
+async def cumulative_observation_report(request: Request):
+    return request.app.state.validation_store.statistical_report()
+
+
+@router.get("/api/v1/observation/report/daily")
+async def daily_observation_report(request: Request, day: str | None = None):
+    selected = date.fromisoformat(day) if day else datetime.now(timezone.utc).date()
+    start = datetime.combine(selected, time.min, tzinfo=timezone.utc)
+    end = datetime.combine(selected, time.max, tzinfo=timezone.utc)
+    return request.app.state.validation_store.statistical_report(
+        int(start.timestamp() * 1000), int(end.timestamp() * 1000) + 1)
