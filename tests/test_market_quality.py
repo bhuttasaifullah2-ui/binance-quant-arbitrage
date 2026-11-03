@@ -2,7 +2,7 @@ from decimal import Decimal as D
 from app.domain.market_quality import spread_bps, estimate_market_slippage, basis_bps
 
 def test_spread_is_decimal_bps():
-    assert spread_bps(D('99'), D('101')) == D('200') / D('100')
+    assert spread_bps(D('99'), D('101')) == D('200')
 
 def test_market_slippage_buy_and_insufficient_depth():
     levels = [['100', '2'], ['101', '2']]
