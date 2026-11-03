@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     request_max_retries: int = 4
     retry_base_seconds: float = 0.4
     scan_interval_seconds: int = 60
-    max_data_age_seconds: int = 15
+    max_data_age_seconds: int = 75
     min_spot_quote_volume_usdt: str = "10000000"
     min_futures_quote_volume_usdt: str = "10000000"
     max_spot_spread_bps: str = "8"
