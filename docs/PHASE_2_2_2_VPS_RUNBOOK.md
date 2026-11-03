@@ -41,7 +41,7 @@ These commands target Ubuntu 24.04 LTS, where Python 3.12 is available from the 
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y git ca-certificates curl python3.12 python3.12-venv python3.12-dev build-essential sqlite3
+sudo apt-get install -y git ca-certificates curl python3.12 python3.12-venv python3.12-dev build-essential sqlite3 ufw
 python3.12 --version
 git --version
 sqlite3 --version
@@ -68,12 +68,31 @@ The code checkout and virtual environment are root-owned and not writable by the
 
 Use the existing PR feature branch as the fetch source, but check out the exact immutable commit in detached-HEAD mode. This avoids accidentally deploying a later branch head.
 
+**Existing checkout protection:** never delete, clean, or overwrite an existing application directory. If the path already exists, inspect it first. Preserve any operator data and stop if its purpose or contents are unclear.
+
 ```bash
-sudo git clone --no-checkout https://github.com/bhuttasaifullah2-ui/binance-quant-arbitrage.git /opt/binance-quant-arbitrage
-sudo git -C /opt/binance-quant-arbitrage fetch --no-tags origin feature/phase-2-2-live-validation
-sudo git -C /opt/binance-quant-arbitrage checkout --detach 3d0c5d27f5520827388ea70761d6f9232416a993
-sudo git -C /opt/binance-quant-arbitrage rev-parse HEAD
-sudo git -C /opt/binance-quant-arbitrage status --short
+APP_DIR=/opt/binance-quant-arbitrage
+if [ -e "$APP_DIR" ]; then
+  echo "Existing path found; inspect before proceeding:"
+  sudo ls -la "$APP_DIR"
+  if [ -d "$APP_DIR/.git" ]; then
+    sudo git -C "$APP_DIR" remote -v
+    sudo git -C "$APP_DIR" rev-parse --show-toplevel
+    sudo git -C "$APP_DIR" rev-parse HEAD
+    sudo git -C "$APP_DIR" status --short
+  else
+    echo "ERROR: path exists but is not a Git checkout; stop without changing it." >&2
+    exit 1
+  fi
+  echo "Continue only after confirming this is the intended checkout and preserving any required data."
+else
+  sudo git clone --no-checkout https://github.com/bhuttasaifullah2-ui/binance-quant-arbitrage.git "$APP_DIR"
+fi
+
+sudo git -C "$APP_DIR" fetch --no-tags origin feature/phase-2-2-live-validation
+sudo git -C "$APP_DIR" checkout --detach 3d0c5d27f5520827388ea70761d6f9232416a993
+sudo git -C "$APP_DIR" rev-parse HEAD
+sudo git -C "$APP_DIR" status --short
 ```
 
 The `rev-parse` output must be exactly:
@@ -82,8 +101,7 @@ The `rev-parse` output must be exactly:
 3d0c5d27f5520827388ea70761d6f9232416a993
 ```
 
-The working tree should be clean. If the fetch or checkout fails, stop. Do not substitute the branch's current head or another SHA.
-
+The working tree should be clean. If the fetch or checkout fails, stop. Do not substitute the branch's current head or another SHA. If an existing checkout has local modifications or valuable data, do not reset or clean it; use a separately reviewed recovery/backup plan before proceeding.
 ## 5. Create the Python environment and run pre-deployment checks
 
 ```bash
@@ -212,13 +230,22 @@ There is deliberately no `--workers` option. Do not add one. Do not run Uvicorn 
 
 The API must listen on loopback only. Confirm this in the unit's `ExecStart` and later with `ss`.
 
-If UFW is already enabled, ensure TCP/8000 is not allowed from external interfaces. Do not enable UFW remotely until SSH access is explicitly allowed and the operator understands the impact.
+UFW is installed by the Ubuntu prerequisite command above. A VPS provider firewall/security group is an acceptable alternative. In either case, verify inbound TCP/8000 is denied from the public internet.
+
+**Remote firewall safety:** do not enable UFW or modify remote firewall rules until you have confirmed the SSH port in use, explicitly allowed SSH from the operator's trusted source, and verified a recovery path such as the provider console. Firewall changes can disconnect your SSH session. Do not blindly run `ufw enable`.
+
+If choosing UFW, inspect the current rules first. If SSH uses the standard OpenSSH profile, allow it before any operator-approved enablement. For a non-standard SSH port, add an explicit allow rule for that port instead. Do not enable UFW until the operator has verified the rules and SSH access.
 
 ```bash
 sudo ufw status verbose
+# Standard SSH profile; use an explicit port rule if SSH is non-standard:
+sudo ufw allow OpenSSH
 sudo ufw deny 8000/tcp
+sudo ufw status numbered
 sudo ss -ltnp | grep ':8000'
 ```
+
+If using the provider firewall instead, inspect its inbound rules in the provider console and deny public TCP/8000 there. Confirm from outside the VPS that TCP/8000 is not reachable. A loopback listener alone does not prove provider firewall correctness.
 
 Expected listener address: `127.0.0.1:8000`. A listener on `0.0.0.0:8000`, `[::]:8000` or a public IP is a stop condition. Do not create a public reverse-proxy route to this API. For remote operator access, use an SSH tunnel from the operator workstation:
 
@@ -227,7 +254,6 @@ ssh -L 8000:127.0.0.1:8000 <operator-user>@<vps-host>
 ```
 
 Then access `http://127.0.0.1:8000` on the operator workstation while the tunnel is active.
-
 ## 10. Start, inspect and stop
 
 Start only after all preceding checks pass:
@@ -283,14 +309,42 @@ Record the exact UTC start time, Git SHA, Python version, package version, FastA
 
 ## 12. Session JSON evidence export
 
-After identifying the session UUID from `/api/v1/observation/sessions`, set it explicitly:
+After identifying the session UUID from `/api/v1/observation/sessions`, set it explicitly. This download deliberately writes to a temporary file, checks the HTTP status, rejects an empty response, validates JSON, and only then renames it to the final export path.
 
 ```bash
 SESSION_ID='<paste-session-uuid-here>'
-curl --fail --silent --show-error \
-  "http://127.0.0.1:8000/api/v1/observation/sessions/$SESSION_ID/report.json" \
-  | sudo -u quantbot tee "/var/lib/binance-quant-arbitrage/session-$SESSION_ID.json" >/dev/null
-sudo chmod 0600 "/var/lib/binance-quant-arbitrage/session-$SESSION_ID.json"
+EXPORT_PATH="/var/lib/binance-quant-arbitrage/session-$SESSION_ID.json"
+TEMP_PATH="$EXPORT_PATH.tmp"
+EXPORT_URL="http://127.0.0.1:8000/api/v1/observation/sessions/$SESSION_ID/report.json"
+
+# Keep this enabled before any pipeline used in later operator commands.
+set -euo pipefail
+
+HTTP_STATUS="$(sudo -u quantbot curl --silent --show-error \
+  --output "$TEMP_PATH" --write-out '%{http_code}' "$EXPORT_URL")" || {
+  echo "ERROR: curl failed; export was not accepted." >&2
+  sudo rm -f "$TEMP_PATH"
+  exit 1
+}
+if [ "$HTTP_STATUS" != "200" ]; then
+  echo "ERROR: expected HTTP 200, received $HTTP_STATUS." >&2
+  sudo rm -f "$TEMP_PATH"
+  exit 1
+fi
+if ! sudo -u quantbot test -s "$TEMP_PATH"; then
+  echo "ERROR: export is empty." >&2
+  sudo rm -f "$TEMP_PATH"
+  exit 1
+fi
+if ! sudo -u quantbot /opt/binance-quant-arbitrage/.venv/bin/python -m json.tool "$TEMP_PATH" >/dev/null; then
+  echo "ERROR: export is not complete, valid JSON." >&2
+  sudo rm -f "$TEMP_PATH"
+  exit 1
+fi
+
+sudo -u quantbot mv "$TEMP_PATH" "$EXPORT_PATH"
+sudo chmod 0600 "$EXPORT_PATH"
+echo "Verified export: $EXPORT_PATH (HTTP $HTTP_STATUS; non-empty valid JSON)"
 ```
 
 The export is tied to the selected session and includes metadata, observations, events, data-quality decisions, eligibility decisions, opportunity snapshots and summary counts. Missing data is not evidence of health. WebSocket uptime may be null when complete boundaries are not available.
@@ -305,54 +359,62 @@ sudo -u quantbot /opt/binance-quant-arbitrage/.venv/bin/python -c \
   "/var/lib/binance-quant-arbitrage/session-$SESSION_ID.json"
 ```
 
-Transfer evidence securely using SCP over SSH, not public web hosting or an unauthenticated endpoint:
+Transfer evidence securely using SCP over SSH, not public web hosting or an unauthenticated endpoint. Run these commands on the operator workstation:
 
 ```bash
+mkdir -p ./evidence
 scp <operator-user>@<vps-host>:/var/lib/binance-quant-arbitrage/session-<session-uuid>.json ./evidence/
 ```
 
 Before sharing logs or reports, inspect them for hostnames, public IPs, usernames, filesystem paths or other operational details. Do not share environment files, SSH keys, credentials or private system logs. Preserve the original JSON unchanged; create a separate redacted copy if needed.
-
 ## 13. Database integrity and backup
 
-Stop the service before making a simple file copy so SQLite has no active writer:
+**Preferred method: SQLite's online backup API.** It creates a consistent database snapshot and accounts for committed data in the write-ahead log (WAL). Do not copy only `market_data.sqlite3` while WAL mode is active: committed transactions may still reside in `market_data.sqlite3-wal` and may not yet have been checkpointed into the main database. A raw copy of only the main file can omit those transactions. The `-shm` file is coordination state and is not a replacement for the WAL.
+
+Create a protected backup directory and use Python's SQLite backup API. This may run while the service is online:
+
+```bash
+sudo install -d -o root -g root -m 0700 /var/backups/binance-quant-arbitrage
+BACKUP_PATH="/var/backups/binance-quant-arbitrage/market_data-$(date -u +%Y%m%dT%H%M%SZ).sqlite3"
+sudo env BACKUP_PATH="$BACKUP_PATH" /opt/binance-quant-arbitrage/.venv/bin/python - <<'PY'
+import os
+import sqlite3
+
+source_path = "/var/lib/binance-quant-arbitrage/market_data.sqlite3"
+backup_path = os.environ["BACKUP_PATH"]
+
+source = sqlite3.connect(f"file:{source_path}?mode=ro", uri=True)
+target = sqlite3.connect(backup_path)
+try:
+    source.backup(target)
+finally:
+    target.close()
+    source.close()
+print(f"SQLite backup created: {backup_path}")
+PY
+sudo chmod 0600 "$BACKUP_PATH"
+sudo sqlite3 "$BACKUP_PATH" 'PRAGMA integrity_check;'
+```
+
+Expected integrity output is exactly `ok`. Keep the backup only if the integrity check succeeds. If it reports anything else, preserve the source and backup for investigation and do not treat the backup as valid.
+
+**WAL checkpointing:** SQLite normally checkpoints WAL pages into the main database automatically, but an arbitrary file copy is not guaranteed to occur after a checkpoint. If you need an explicit checkpoint for maintenance, stop the service first, then run:
 
 ```bash
 sudo systemctl stop binance-quant-arbitrage
+sudo sqlite3 /var/lib/binance-quant-arbitrage/market_data.sqlite3 'PRAGMA wal_checkpoint(TRUNCATE);'
 sudo sqlite3 /var/lib/binance-quant-arbitrage/market_data.sqlite3 'PRAGMA integrity_check;'
-sudo install -d -o root -g root -m 0700 /var/backups/binance-quant-arbitrage
-sudo cp --preserve=mode,timestamps \
-  /var/lib/binance-quant-arbitrage/market_data.sqlite3 \
-  /var/backups/binance-quant-arbitrage/market_data-$(date -u +%Y%m%dT%H%M%SZ).sqlite3
-sudo chmod 0600 /var/backups/binance-quant-arbitrage/*.sqlite3
+```
+
+Inspect the checkpoint's returned values; do not assume it succeeded if a reader/writer is busy or frames remain. Do not manually delete `-wal` or `-shm` files. For routine backups, prefer the backup API above and avoid raw file copies.
+
+After the maintenance operation, start the service again:
+
+```bash
 sudo systemctl start binance-quant-arbitrage
 ```
 
-Expected integrity result is `ok`. If it is not, keep the service stopped and preserve the original database and any WAL/SHM companions for investigation. Do not delete WAL/SHM files to try to repair the database.
-
-For an online backup while the service is running, use SQLite's backup API rather than copying only the main database file:
-
-```bash
-sudo -u quantbot /opt/binance-quant-arbitrage/.venv/bin/python - <<'PY'
-import sqlite3
-source = sqlite3.connect("/var/lib/binance-quant-arbitrage/market_data.sqlite3")
-target = sqlite3.connect("/var/lib/binance-quant-arbitrage/market_data-backup.sqlite3")
-with target:
-    source.backup(target)
-target.close()
-source.close()
-PY
-sudo chmod 0600 /var/lib/binance-quant-arbitrage/market_data-backup.sqlite3
-```
-
-After a backup, check it independently:
-
-```bash
-sudo sqlite3 /var/lib/binance-quant-arbitrage/market_data-backup.sqlite3 'PRAGMA integrity_check;'
-```
-
 Keep encrypted off-host backups under the operator's normal secure backup policy. Do not transfer the SQLite database to a public location.
-
 ## 14. Restart recovery test
 
 First perform a graceful restart:
