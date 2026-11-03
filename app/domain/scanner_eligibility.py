@@ -19,6 +19,7 @@ class EligibilityDecision:
     symbol: str
     checked_at_ms: int
     rejections: tuple[Rejection, ...]
+    diagnostics: dict[str, Any]
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -32,6 +33,7 @@ class EligibilityDecision:
                 for item in self.rejections
             ],
             "execution": "THEORETICAL_ONLY",
+            **self.diagnostics,
         }
 
 
@@ -128,4 +130,15 @@ def validate_scanner_eligibility(
     if min_depth is None or spot_depth is None or futures_depth is None or min(spot_depth, futures_depth) < min_depth:
         reject("ORDERBOOK_LIQUIDITY_INSUFFICIENT", "Spot or Futures visible order-book depth is below the configured minimum")
 
-    return EligibilityDecision(not rejected, symbol.upper(), checked_at_ms, tuple(rejected))
+    data_quality_status = "INVALID" if invalid else "MISSING" if missing else "STALE" if (context.get("market_data_stale") or stale) else "HEALTHY"
+    diagnostics = {
+        "data_quality": {"status": data_quality_status, "missing_fields": missing,
+                         "invalid_fields": invalid, "stale_fields": stale,
+                         "field_ages_ms": ages},
+        "websocket_health": {name: bool((context.get("websocket_feeds") or {}).get(name, {}).get("healthy"))
+                             for name in ("spot", "futures")},
+        "clock_offsets_ms": offsets,
+        "funding_data_status": "INCONSISTENT" if context.get("funding_inconsistent") or context.get("funding_gaps") else
+                               "STALE" if funding_age is None or int(funding_age) > funding_max_age else "CURRENT",
+    }
+    return EligibilityDecision(not rejected, symbol.upper(), checked_at_ms, tuple(rejected), diagnostics)
