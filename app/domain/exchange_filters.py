@@ -34,6 +34,8 @@ class SymbolFilters:
         filters = {x.get("filterType"): x for x in symbol_info.get("filters", [])}
         lot = filters.get("LOT_SIZE", {})
         market_lot = filters.get("MARKET_LOT_SIZE", lot)
+        if Decimal(str(market_lot.get("stepSize", "0"))) <= ZERO:
+            market_lot = lot
         price = filters.get("PRICE_FILTER", {})
         notional = filters.get("NOTIONAL") or filters.get("MIN_NOTIONAL") or {}
         min_notional = notional.get("minNotional", notional.get("notional", "0"))
@@ -90,12 +92,13 @@ class SymbolFilters:
             reasons.append("quantity above maximum quantity")
         if price <= ZERO:
             reasons.append("price must be positive")
-        if self.tick_size > ZERO and price % self.tick_size != ZERO:
-            reasons.append("price does not conform to tick size")
-        if self.min_price > ZERO and price < self.min_price:
-            reasons.append("price below minimum price")
-        if self.max_price > ZERO and price > self.max_price:
-            reasons.append("price above maximum price")
+        if not market_order:
+            if self.tick_size > ZERO and price % self.tick_size != ZERO:
+                reasons.append("price does not conform to tick size")
+            if self.min_price > ZERO and price < self.min_price:
+                reasons.append("price below minimum price")
+            if self.max_price > ZERO and price > self.max_price:
+                reasons.append("price above maximum price")
         notional = quantity * price * self.contract_size
         if self.min_notional > ZERO and (not market_order or self.apply_min_notional_to_market) and notional < self.min_notional:
             reasons.append("notional below minimum notional")
