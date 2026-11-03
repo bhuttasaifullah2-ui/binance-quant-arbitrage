@@ -291,7 +291,7 @@ class MarketScanner:
                         if history_gaps:
                             self._reject(symbol, f"historical funding gaps detected:{len(history_gaps)}", now)
                         bps = basis_bps(spot_buy.vwap, fut_sell.vwap)
-                        basis_penalty = abs(bps)/Decimal("10000")*notional*_d(self.config.basis_risk_haircut)
+                        basis_penalty = abs(bps)/Decimal("10000")*matched_notional*_d(self.config.basis_risk_haircut)
                         net = gross_funding - entry_fees - exit_fees - slippage_cost - basis_penalty
                         age_ms = 0
                         if self.config.websocket_enabled and self.market_hub:
@@ -331,7 +331,7 @@ class MarketScanner:
                             hedge_mismatch_fraction=hedge["mismatch_fraction"],
                             max_hedge_mismatch=_d(self.config.max_hedge_mismatch),
                             residual_exposure_usdt=hedge["residual_directional_exposure"],
-                            max_residual_exposure_usdt=notional*_d(self.config.max_hedge_mismatch))
+                            max_residual_exposure_usdt=matched_notional*_d(self.config.max_hedge_mismatch))
                         score = score_factors["score"]
                         if next_funding <= now or stats["count"] == 0 or net <= _d(self.config.min_net_edge_usdt):
                             self._reject(symbol, "funding history absent/expired or estimated net edge below threshold", now); continue
@@ -349,7 +349,7 @@ class MarketScanner:
                                "futures_slippage_bps": fut_sell.slippage_bps + fut_buy.slippage_bps,
                                "basis_bps": bps, "observed_at_ms": now, "source": "binance_ws" if ws_ready else "binance_rest"}
                         self.store.save_observation(row)
-                        break_even = (entry_fees + exit_fees + slippage_cost + basis_penalty) / notional
+                        break_even = (entry_fees + exit_fees + slippage_cost + basis_penalty) / matched_notional
                         out.append({
                             "symbol": symbol, "score": str(score), "funding_rate": str(funding),
                             "funding_history": {k: str(v) for k, v in stats.items()},
