@@ -301,8 +301,8 @@ class MarketScanner:
                         if self.config.websocket_enabled and self.market_hub:
                             state = self.market_hub.states.get(symbol)
                             required = ("spot_bid", "spot_ask", "spot_last", "spot_quote_volume",
-                                        "futures_bid", "futures_ask", "futures_mark", "futures_index",
-                                        "funding_rate", "next_funding_time_ms")
+                                        "futures_bid", "futures_ask", "futures_last", "futures_quote_volume",
+                                        "futures_mark", "futures_index", "funding_rate", "next_funding_time_ms")
                             quality = state.freshness(now, self.config.max_data_age_seconds*1000, required) if state else {"valid": False, "ages_ms": {}, "reasons": ["missing state"]}
                             if not quality["valid"]:
                                 self._reject(symbol, ";".join(quality["reasons"]), now); continue
