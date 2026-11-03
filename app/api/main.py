@@ -82,17 +82,68 @@ async def market_overview(request: Request, limit: int = Query(100, ge=1, le=500
 
 @app.get("/api/v1/market/spot")
 async def spot_market(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
-    store = request.app.state.market_store
-    return {"items": store.latest(limit, offset), "limit": limit, "offset": offset}
+    client: BinancePublicClient = request.app.state.binance_client
+    try:
+        info, tickers, books = await asyncio.gather(
+            client.spot_exchange_info(), client.spot_ticker_24h(), client.spot_book_ticker())
+        ticker_map = {x["symbol"]: x for x in tickers if "symbol" in x}
+        book_map = {x["symbol"]: x for x in books if "symbol" in x}
+        items = []
+        for symbol in info.get("symbols", []):
+            name = symbol.get("symbol")
+            if symbol.get("status") != "TRADING" or symbol.get("quoteAsset") != "USDT" or not symbol.get("isSpotTradingAllowed", True):
+                continue
+            ticker, book = ticker_map.get(name), book_map.get(name)
+            if not ticker or not book or not all(k in ticker for k in ("lastPrice", "quoteVolume")) or not all(k in book for k in ("bidPrice", "askPrice")):
+                continue
+            items.append({"symbol": name, "status": symbol.get("status"), "last_price": ticker["lastPrice"],
+                "quote_volume_24h_usdt": ticker["quoteVolume"], "bid": book["bidPrice"], "ask": book["askPrice"],
+                "source": "binance_spot_rest"})
+        return {"items": items[offset:offset+limit], "total": len(items), "limit": limit, "offset": offset}
+    except BinanceAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 @app.get("/api/v1/market/futures")
 async def futures_market(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
-    store = request.app.state.market_store
-    return {"items": store.latest(limit, offset), "limit": limit, "offset": offset}
+    client: BinancePublicClient = request.app.state.binance_client
+    try:
+        info, tickers, books, premium = await asyncio.gather(
+            client.futures_exchange_info(), client.futures_ticker_24h(),
+            client.futures_book_ticker(), client.futures_premium_index())
+        ticker_map = {x["symbol"]: x for x in tickers if "symbol" in x}
+        book_map = {x["symbol"]: x for x in books if "symbol" in x}
+        premium_map = {x["symbol"]: x for x in premium if "symbol" in x}
+        items = []
+        for symbol in info.get("symbols", []):
+            name = symbol.get("symbol")
+            if symbol.get("status") != "TRADING" or symbol.get("quoteAsset") != "USDT" or symbol.get("contractType") != "PERPETUAL":
+                continue
+            ticker, book, prem = ticker_map.get(name), book_map.get(name), premium_map.get(name)
+            if not ticker or not book or not prem or not all(k in ticker for k in ("quoteVolume",)) or not all(k in book for k in ("bidPrice", "askPrice")) or not all(k in prem for k in ("markPrice", "indexPrice", "lastFundingRate", "nextFundingTime")):
+                continue
+            items.append({"symbol": name, "status": symbol.get("status"), "quote_volume_24h_usdt": ticker["quoteVolume"],
+                "bid": book["bidPrice"], "ask": book["askPrice"], "mark_price": prem["markPrice"],
+                "index_price": prem["indexPrice"], "funding_rate": prem["lastFundingRate"],
+                "next_funding_time_ms": prem["nextFundingTime"], "source": "binance_usdm_rest"})
+        return {"items": items[offset:offset+limit], "total": len(items), "limit": limit, "offset": offset}
+    except BinanceAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 @app.get("/api/v1/funding/current")
 async def current_funding(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
-    return {"items": request.app.state.market_store.latest(limit, offset), "limit": limit, "offset": offset}
+    client: BinancePublicClient = request.app.state.binance_client
+    try:
+        info, premium = await asyncio.gather(client.futures_exchange_info(), client.futures_premium_index())
+        active = {s["symbol"] for s in info.get("symbols", [])
+                  if s.get("status") == "TRADING" and s.get("quoteAsset") == "USDT" and s.get("contractType") == "PERPETUAL"}
+        items = [{"symbol": x["symbol"], "mark_price": x["markPrice"], "index_price": x["indexPrice"],
+                  "funding_rate": x["lastFundingRate"], "next_funding_time_ms": x["nextFundingTime"],
+                  "source": "binance_usdm_rest"}
+                 for x in premium if x.get("symbol") in active and
+                 all(k in x for k in ("markPrice", "indexPrice", "lastFundingRate", "nextFundingTime"))]
+        return {"items": items[offset:offset+limit], "total": len(items), "limit": limit, "offset": offset}
+    except BinanceAPIError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 @app.get("/api/v1/funding/history/{symbol}")
 async def funding_history(request: Request, symbol: str, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
