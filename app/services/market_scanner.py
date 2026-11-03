@@ -53,6 +53,7 @@ class MarketScanner:
         self._spot_info: dict[str, Any] | None = None
         self._futures_info: dict[str, Any] | None = None
         self.clock_offset_ms = 0
+        self._observed_symbols: set[str] = set()
 
     @property
     def opportunities(self) -> list[dict[str, Any]]:
@@ -346,7 +347,16 @@ class MarketScanner:
                 self.last_scan_ms = int(time.time()*1000)
                 self.last_error = None
                 self.last_valid_count = len(self._opportunities)
-                self.store.save_opportunities(self._opportunities, self.last_scan_ms)
+                if self.config.observation_mode:
+                    current_symbols = {x["symbol"] for x in self._opportunities}
+                    for symbol in sorted(current_symbols - self._observed_symbols):
+                        row = next(x for x in self._opportunities if x["symbol"] == symbol)
+                        self.store.save_opportunity_lifecycle(symbol, "APPEARED", self.last_scan_ms,
+                                                               row.get("score"), row.get("estimated_net_usdt"))
+                    for symbol in sorted(self._observed_symbols - current_symbols):
+                        self.store.save_opportunity_lifecycle(symbol, "DISAPPEARED", self.last_scan_ms)
+                    self.store.save_opportunities(self._opportunities, self.last_scan_ms)
+                    self._observed_symbols = current_symbols
                 self.store.save_scanner_run(started, self.last_scan_ms, self.last_pair_count,
                                             len(self._opportunities), len(self._rejections), None)
                 self.store.prune(self.last_scan_ms)
