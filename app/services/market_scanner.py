@@ -9,7 +9,7 @@ from app.domain.funding import summarize_funding, detect_funding_interval_hours
 from app.domain.market_quality import estimate_market_slippage, basis_bps
 from app.domain.models import FundingObservation
 from app.domain.profitability import CostModel, estimate_net_funding
-from app.domain.ranking import score_opportunity
+from app.domain.ranking import score_opportunity, RankingWeights
 from app.exchange.binance.public_client import BinancePublicClient
 from app.infrastructure.sqlite_store import SQLiteMarketStore
 
@@ -141,6 +141,15 @@ class MarketScanner:
                         weight=Decimal("1")-_d(self.config.basis_risk_haircut)
                         # Conservative basis haircut is a ranking penalty, not an assumed cash gain.
                         net=profit.expected_net - abs(bps)/Decimal("10000")*notional*_d(self.config.basis_risk_haircut)
+                        weights=RankingWeights(
+                            net_edge=_d(self.config.score_weight_net_edge),
+                            funding_consistency=_d(self.config.score_weight_funding_consistency),
+                            liquidity=_d(self.config.score_weight_liquidity),
+                            spread=_d(self.config.score_weight_spread),
+                            slippage=_d(self.config.score_weight_slippage),
+                            basis=_d(self.config.score_weight_basis),
+                            freshness=_d(self.config.score_weight_freshness),
+                            funding_volatility=_d(self.config.score_weight_funding_volatility))
                         score=score_opportunity(net_edge_usdt=net,
                             funding_positive_fraction=stats["positive_fraction"],funding_volatility=stats["volatility"],
                             spot_depth_usdt=spot_depth,futures_depth_usdt=fut_depth,
@@ -148,8 +157,9 @@ class MarketScanner:
                             futures_spread_bps=(fut_ask-fut_bid)/((fut_ask+fut_bid)/2)*Decimal("10000"),
                             estimated_slippage_bps=sum(slips,Decimal("0")),basis_bps_value=bps,
                             data_age_seconds=data_age,max_data_age_seconds=Decimal(self.config.max_data_age_seconds),
-                            min_depth_usdt=notional,max_spread_bps=Decimal("10"),max_slippage_bps=Decimal("30"),
-                            max_basis_bps=Decimal("100"))
+                            min_depth_usdt=notional,max_spread_bps=_d(self.config.ranking_max_spread_bps),
+                            max_slippage_bps=_d(self.config.ranking_max_slippage_bps),
+                            max_basis_bps=_d(self.config.ranking_max_basis_bps),weights=weights)
                         if next_funding <= now or stats["count"] == 0 or net <= _d(self.config.min_net_edge_usdt):
                             continue
                         row={"symbol":symbol,"spot_bid":spot_bid,"spot_ask":spot_ask,"spot_last":_d(st["lastPrice"]),
@@ -161,6 +171,12 @@ class MarketScanner:
                             "futures_slippage_bps":fut_sell_slip+fut_buy_slip,"basis_bps":bps,
                             "observed_at_ms":now,"source":"binance_rest"}
                         self.store.save_observation(row)
+                        spot_qty_theoretical = notional / spot_ask
+                        futures_qty_theoretical = notional / mark
+                        spot_exposure = spot_qty_theoretical * spot_ask
+                        futures_exposure = futures_qty_theoretical * mark
+                        hedge_ratio = futures_exposure / spot_exposure if spot_exposure else Decimal("0")
+                        break_even_rate = (profit.entry_fees + profit.exit_fees + profit.slippage) / notional
                         out.append({"symbol":symbol,"score":str(score),"funding_rate":str(funding),
                             "funding_history":{k:str(v) for k,v in stats.items()},
                             "next_funding_time_ms":next_funding,"funding_interval_hours":funding_interval,
@@ -170,7 +186,15 @@ class MarketScanner:
                             "futures_spread_bps":str((fut_ask-fut_bid)/((fut_ask+fut_bid)/2)*Decimal("10000")),
                             "spot_depth_usdt":str(spot_depth),"futures_depth_usdt":str(fut_depth),
                             "estimated_slippage_bps":str(sum(slips,Decimal("0"))),
-                            "basis_bps":str(bps),"gross_funding_usdt":str(profit.gross_funding),
+                            "basis_bps":str(bps),"entry_basis_bps":str(bps),
+                            "estimated_exit_basis_bps_assumption":str(bps),
+                            "spot_quantity_theoretical":str(spot_qty_theoretical),
+                            "futures_quantity_theoretical":str(futures_qty_theoretical),
+                            "hedge_ratio":str(hedge_ratio),
+                            "break_even_funding_rate":str(break_even_rate),
+                            "expected_holding_period_return_pct":str(net/notional*Decimal("100")),
+                            "holding_period_assumption":"one next funding interval",
+                            "gross_funding_usdt":str(profit.gross_funding),
                             "estimated_fees_usdt":str(profit.entry_fees+profit.exit_fees),
                             "estimated_slippage_cost_usdt":str(profit.slippage),
                             "estimated_net_usdt":str(net),"status":"ESTIMATED_NOT_REALIZED",
