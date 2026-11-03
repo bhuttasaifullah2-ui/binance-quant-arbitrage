@@ -20,6 +20,8 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install
         run: python -m pip install -e '.[dev]'
+      - name: Lint Phase 2.2 modules
+        run: ruff check app/api/validation.py app/domain/sensitivity.py app/infrastructure/validation_store.py app/services/live_validation.py tests/test_validation_phase22.py
       - name: Compile
         run: python -m compileall -q app tests
       - name: Test suite
