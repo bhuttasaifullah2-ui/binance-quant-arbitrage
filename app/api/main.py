@@ -50,12 +50,22 @@ async def lifespan(app: FastAPI):
         settings.retry_base_seconds, settings.max_concurrent_requests)
     store = SQLiteMarketStore(settings.database_path, settings.retention_days)
     hub = MarketDataHub(settings.max_clock_skew_ms)
+    try:
+        local_now = int(time.time()*1000)
+        spot_time, futures_time = await asyncio.gather(client.spot_server_time(), client.futures_server_time())
+        hub.set_clock_offset("spot", int(spot_time["serverTime"])-local_now, local_now)
+        hub.set_clock_offset("futures", int(futures_time["serverTime"])-local_now, local_now)
+    except (BinanceAPIError, KeyError, ValueError, TypeError):
+        logger.warning("Could not synchronize Binance exchange clocks; using local receive timestamps")
     recovery_lock = asyncio.Lock()
     last_recovery_ms = 0
 
     async def recover_snapshots(symbols: list[str]) -> None:
         nonlocal last_recovery_ms
         async with recovery_lock:
+            symbols = sorted(hub.symbols)
+            if not symbols:
+                return
             now = int(time.time()*1000)
             if now - last_recovery_ms < 5000:
                 return
