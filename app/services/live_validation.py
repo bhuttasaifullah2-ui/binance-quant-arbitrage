@@ -90,6 +90,8 @@ class LiveValidationService:
         return self.connectivity
     def websocket_health(self) -> dict[str,Any]:
         streams=self.hub.stream_health()
+        if getattr(self.websocket_manager, 'metrics', None):
+            streams['streams'] = {k: dict(value) for k, value in self.websocket_manager.metrics.items()}
         now=int(time.time()*1000)
         for market,item in streams.get("streams",{}).items():
             age=item.get("last_event_age_ms")
@@ -140,6 +142,48 @@ class LiveValidationService:
           "actual_future_funding":"UNKNOWN_UNTIL_REALIZED"}
         self.store.record("funding",symbol.upper(),self.funding["checked_at_ms"],self.funding["status"],self.funding)
         return self.funding
+
+    async def validate_hedge(self, symbol: str = "BTCUSDT") -> dict[str,Any]:
+        from app.domain.exchange_filters import SymbolFilters, matched_valid_hedge
+        spot_info, futures_info = await asyncio.gather(
+            self.client.spot_exchange_info(), self.client.futures_exchange_info())
+        spot_raw = next((x for x in spot_info.get("symbols", []) if x.get("symbol") == symbol.upper()), None)
+        futures_raw = next((x for x in futures_info.get("symbols", []) if x.get("symbol") == symbol.upper()), None)
+        if not spot_raw or not futures_raw:
+            self.hedge = {"symbol":symbol.upper(),"status":"INVALID","reason":"Exchange metadata missing"}
+            return self.hedge
+        spot_book, futures_book = await asyncio.gather(
+            self.client.spot_depth(symbol.upper(), 5), self.client.futures_depth(symbol.upper(), 5))
+        spot_price = Decimal(str(spot_book["asks"][0][0]))
+        futures_price = Decimal(str(futures_book["bids"][0][0]))
+        spot_filter = SymbolFilters.from_exchange_info(spot_raw,"spot")
+        futures_filter = SymbolFilters.from_exchange_info(futures_raw,"futures")
+        scenarios={}
+        for label,notional in (("small",Decimal("100")),("medium",Decimal("1000")),("large",Decimal("10000"))):
+            result=matched_valid_hedge(notional,spot_price,futures_price,spot_filter,futures_filter)
+            scenarios[label]={k:(str(val) if isinstance(val,Decimal) else list(val) if isinstance(val,tuple) else val)
+                for k,val in result.items()}
+        self.hedge={"symbol":symbol.upper(),"status":"COMPLETED","checked_at_ms":int(time.time()*1000),
+            "spot_status":spot_filter.status,"futures_status":futures_filter.status,
+            "scenarios":scenarios,"execution":"THEORETICAL_ONLY — no orders placed"}
+        self.store.record("hedge",symbol.upper(),self.hedge["checked_at_ms"],"COMPLETED",self.hedge)
+        return self.hedge
+    def validate_profitability(self, notional: str = "1000") -> dict[str,Any]:
+        from app.domain.profitability import CostModel
+        from app.domain.sensitivity import profitability_scenarios
+        amount=Decimal(notional)
+        rate=Decimal(str(self.funding.get("current_observed_rate") or "0"))
+        fees=CostModel(Decimal("0.001"),Decimal("0.0005"),Decimal("0.001"),Decimal("0.0005"),
+                       Decimal("0.0002"),Decimal("0.0002"))
+        results=profitability_scenarios(amount,rate,fees,Decimal("0.0001"))
+        self.profitability={"status":"ESTIMATES_ONLY","checked_at_ms":int(time.time()*1000),
+            "symbol":self.funding.get("symbol"),"notional_usdt":str(amount),
+            "observed_funding_rate":str(rate),"scenarios":results,
+            "disclaimer":"Hypothetical estimates, not realized profit or guaranteed funding."}
+        self.store.record("profitability","sensitivity",self.profitability["checked_at_ms"],
+                          "ESTIMATES_ONLY",self.profitability)
+        return self.profitability
+
     def summary(self) -> dict[str,Any]:
         quality=self.data_quality(); ws=self.websocket_health()
         return {"checked_at_ms":int(time.time()*1000),
