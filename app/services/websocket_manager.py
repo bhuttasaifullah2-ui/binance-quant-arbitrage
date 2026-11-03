@@ -22,11 +22,14 @@ class BinanceWebSocketManager:
         self._stop = asyncio.Event()
         self._changed = asyncio.Event()
         self._tasks: list[asyncio.Task[None]] = []
+        self._last_health_persist_ms: dict[str, int] = {}
 
     def _set_health(self, market: str, value: dict[str, Any]) -> None:
         self.hub.health[market] = value
         if self.health_sink:
-            self.health_sink(market, value, int(time.time()*1000))
+            now_ms = int(time.time()*1000)
+            self.health_sink(market, value, now_ms)
+            self._last_health_persist_ms[market] = now_ms
 
     def set_symbols(self, symbols: set[str]) -> None:
         normalized = {s.lower() for s in symbols}
@@ -68,9 +71,11 @@ class BinanceWebSocketManager:
                                 message["_market"] = market
                             accepted = self.hub.apply_message(message)
                             if accepted:
-                                self.hub.health[market]["last_event_ms"] = int(time.time()*1000)
-                                if self.health_sink:
-                                    self.health_sink(market, self.hub.health[market], int(time.time()*1000))
+                                event_now = int(time.time()*1000)
+                                self.hub.health[market]["last_event_ms"] = event_now
+                                if self.health_sink and event_now-self._last_health_persist_ms.get(market, 0) >= 10000:
+                                    self.health_sink(market, self.hub.health[market], event_now)
+                                    self._last_health_persist_ms[market] = event_now
                         except (ValueError, TypeError):
                             logger.exception("Invalid %s websocket event", market)
             except asyncio.CancelledError:
