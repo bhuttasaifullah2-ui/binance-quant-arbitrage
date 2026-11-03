@@ -498,6 +498,10 @@ class MarketScanner:
                                          getattr(self.websocket_manager, "metrics", {}).items()}
                         self.observation_store.record_snapshot(
                             self._opportunities, self._eligibility_decisions, self.last_scan_ms, ws_status)
+                        self.observation_store.record_scan(
+                            started, self.last_scan_ms, self.last_pair_count,
+                            len(self._opportunities), len(self._rejections),
+                            max(1000, int(self.config.scan_interval_seconds) * 1000))
                     else:
                         for symbol in sorted(current_symbols - self._observed_symbols):
                             row = next(x for x in self._opportunities if x["symbol"] == symbol)
@@ -514,8 +518,13 @@ class MarketScanner:
                 self.last_error = f"{type(exc).__name__}: {exc}"
                 self._opportunities = []
                 self.last_valid_count = 0
-                self.store.save_scanner_run(started, int(time.time()*1000), self.last_pair_count,
+                failed_at = int(time.time()*1000)
+                self.store.save_scanner_run(started, failed_at, self.last_pair_count,
                                             0, len(self._rejections), self.last_error)
+                if self.config.observation_mode and self.observation_store is not None:
+                    self.observation_store.record_scan(
+                        started, failed_at, self.last_pair_count, 0, len(self._rejections),
+                        max(1000, int(self.config.scan_interval_seconds) * 1000))
                 logger.exception("Market scan failed")
                 return []
 
