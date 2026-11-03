@@ -216,28 +216,42 @@ class ValidationStore:
                     "WEBSOCKET_CONNECTED", "WEBSOCKET_RECOVERED", "WEBSOCKET_DISCONNECTED"
                 }:
                     transitions.append((int(item["event_at_ms"]), item["event_type"], payload))
-            start = None
+            period_start = start_ms if start_ms is not None else (transitions[0][0] if transitions else None)
+            period_end = min(end_ms, now) if end_ms is not None else now
+            connected = False
+            known = False
+            segment_start = None
             up_ms = 0
-            first = transitions[0][0] if transitions else None
-            last = transitions[-1][0] if transitions else None
-            for stamp, event_type, payload in transitions:
-                if event_type in {"WEBSOCKET_CONNECTED", "WEBSOCKET_RECOVERED"}:
-                    if start is None:
-                        start = stamp
-                    if payload.get("recovery_duration_ms") is not None:
-                        recovery_durations.append(int(payload["recovery_duration_ms"]))
-                elif start is not None:
-                    up_ms += max(0, stamp - start)
-                    start = None
-            if start is not None:
-                up_ms += max(0, now - start)
-                last = now
+            window_start = None
+            if period_start is not None:
+                for stamp, event_type, payload in transitions:
+                    if stamp < period_start:
+                        known = True
+                        connected = event_type in {"WEBSOCKET_CONNECTED", "WEBSOCKET_RECOVERED"}
+                        segment_start = period_start if connected else None
+                    elif stamp <= period_end:
+                        if window_start is None:
+                            window_start = stamp
+                        if event_type in {"WEBSOCKET_CONNECTED", "WEBSOCKET_RECOVERED"}:
+                            if not connected:
+                                connected = True
+                                segment_start = stamp
+                            if payload.get("recovery_duration_ms") is not None:
+                                recovery_durations.append(int(payload["recovery_duration_ms"]))
+                        elif connected:
+                            up_ms += max(0, stamp - (segment_start or stamp))
+                            connected = False
+                            segment_start = None
+                if connected and segment_start is not None:
+                    up_ms += max(0, period_end - segment_start)
+                if known:
+                    window_start = period_start
+            denominator = None if window_start is None or period_end <= window_start else period_end - window_start
             uptime[market] = {
                 "measured_connected_ms": up_ms,
-                "measured_window_ms": None if first is None or last is None else max(0, last - first),
-                "uptime_fraction": None if first is None or last is None or last <= first
-                    else str(Decimal(up_ms) / Decimal(last - first)),
-                "evidence": "persisted connection transitions; no uptime inferred before first event",
+                "measured_window_ms": denominator,
+                "uptime_fraction": None if denominator is None else str(Decimal(up_ms) / Decimal(denominator)),
+                "evidence": "persisted connection transitions clipped to report period; no uptime inferred before first known state",
             }
 
         scan_gaps = []
