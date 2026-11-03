@@ -28,6 +28,8 @@ class BinanceWebSocketManager:
         self._connected_since: dict[str, int] = {}
         self._recovery_started: dict[str, int] = {}
         self._connected_shards: dict[str, set[str]] = {"spot": set(), "futures": set()}
+        self._attempted_shards: dict[str, set[str]] = {"spot": set(), "futures": set()}
+        self._failed_shards: dict[str, set[str]] = {"spot": set(), "futures": set()}
 
     def _metric(self, market: str) -> dict[str, Any]:
         return self.metrics.setdefault(market, {"connected": False, "disconnect_count": 0,
@@ -76,22 +78,26 @@ class BinanceWebSocketManager:
     async def _consume(self, market: str, url: str, streams: list[str]) -> None:
         endpoint = url.rstrip("/") + "?streams=" + "/".join(streams)
         delay = 1.0
+        shard_key = streams[0] if streams else "empty"
         while not self._stop.is_set():
             metric = self._metric(market)
-            if metric["initial_connection_attempted"]:
+            attempted = self._attempted_shards.setdefault(market, set())
+            if shard_key in attempted:
                 metric["reconnect_attempts"] += 1
             else:
+                attempted.add(shard_key)
                 metric["initial_connection_attempted"] = True
             self._recovery_started.setdefault(market, int(time.time() * 1000))
             try:
                 async with websockets.connect(endpoint, ping_interval=20, ping_timeout=20,
                                                close_timeout=5, max_size=2**20) as ws:
                     now = int(time.time() * 1000)
-                    shard_key = streams[0] if streams else "empty"
                     connected_shards = self._connected_shards.setdefault(market, set())
                     market_was_down = not connected_shards
-                    if metric["disconnect_count"] and metric["reconnect_attempts"]:
+                    failed_shards = self._failed_shards.setdefault(market, set())
+                    if shard_key in failed_shards:
                         metric["reconnect_count"] += 1
+                        failed_shards.discard(shard_key)
                     metric["consecutive_failures"] = 0
                     connected_shards.add(shard_key)
                     if market_was_down and metric["disconnect_count"]:
@@ -139,7 +145,8 @@ class BinanceWebSocketManager:
                 now = int(time.time() * 1000)
                 metric["disconnect_count"] += 1
                 metric["consecutive_failures"] += 1
-                shard_key = streams[0] if streams else "empty"
+                failed_shards = self._failed_shards.setdefault(market, set())
+                failed_shards.add(shard_key)
                 connected_shards = self._connected_shards.setdefault(market, set())
                 connected_shards.discard(shard_key)
                 market_disconnected = not connected_shards
