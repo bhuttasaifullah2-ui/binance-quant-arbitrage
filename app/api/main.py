@@ -122,6 +122,10 @@ async def lifespan(app: FastAPI):
     app.state.websocket_manager = websocket_manager
     app.state.validation_store = validation_store
     app.state.live_validator = validator
+    try:
+        await validator.check_clock()
+    except Exception:
+        logger.exception("Initial public exchange clock synchronization failed; scanner eligibility will remain blocked until recovered")
     scanner_task = asyncio.create_task(scanner.run_forever(), name="market-scanner")
     ws_task = asyncio.create_task(websocket_manager.run(), name="binance-public-websockets") if settings.websocket_enabled else None
     async def validation_loop() -> None:
@@ -132,6 +136,14 @@ async def lifespan(app: FastAPI):
                 logger.exception("Periodic public validation failed")
             await asyncio.sleep(max(30, settings.validation_interval_seconds))
     validation_task = asyncio.create_task(validation_loop(), name="binance-read-only-validation") if settings.live_validation_enabled else None
+    async def clock_sync_loop() -> None:
+        while True:
+            await asyncio.sleep(max(30, settings.max_clock_sync_age_seconds // 2))
+            try:
+                await validator.check_clock()
+            except Exception:
+                logger.exception("Periodic public exchange clock synchronization failed")
+    clock_task = asyncio.create_task(clock_sync_loop(), name="binance-clock-sync") if not settings.live_validation_enabled else None
     try:
         yield
     finally:
@@ -140,6 +152,12 @@ async def lifespan(app: FastAPI):
             validation_task.cancel()
             try:
                 await validation_task
+            except asyncio.CancelledError:
+                pass
+        if clock_task:
+            clock_task.cancel()
+            try:
+                await clock_task
             except asyncio.CancelledError:
                 pass
         scanner_task.cancel()
