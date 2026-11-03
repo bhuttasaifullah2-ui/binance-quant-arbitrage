@@ -47,7 +47,7 @@ class BinanceWebSocketManager:
         output: list[tuple[str, list[str]]] = []
         for market, url, streams in (("spot", self.spot_url, spot), ("futures", self.futures_url, futures)):
             for i in range(0, len(streams), self.streams_per_connection):
-                output.append((market, streams[i:i+self.streams_per_connection]))
+                output.append((market, url, streams[i:i+self.streams_per_connection]))
         return output
 
     async def _consume(self, market: str, url: str, streams: list[str]) -> None:
