@@ -111,7 +111,9 @@ async def lifespan(app: FastAPI):
     validation_store = ValidationStore(settings.database_path, settings.retention_days)
     validator = LiveValidationService(client, hub, websocket_manager, validation_store,
         settings.max_clock_drift_ms, settings.max_validation_message_age_ms,
-        settings.websocket_probe_timeout_seconds)
+        settings.websocket_probe_timeout_seconds, settings.max_reconnect_attempts,
+        settings.max_recovery_duration_ms, settings.max_message_processing_latency_ms,
+        settings.max_stale_symbols)
     app.state.binance_client = client
     app.state.market_store = store
     app.state.market_scanner = scanner
