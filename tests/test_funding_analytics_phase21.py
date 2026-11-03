@@ -9,7 +9,7 @@ def test_funding_summary_reports_distribution_and_streaks():
             FundingObservation("X", D("0.002"), 3),
             FundingObservation("X", D("0.003"), 4)]
     stats = summarize_funding(rows)
-    assert stats["median"] == D("0.0005")
+    assert stats["median"] == D("0.0015")
     assert stats["positive_percent"] == D("75")
     assert stats["negative_percent"] == D("25")
     assert stats["consecutive_positive"] == 2
