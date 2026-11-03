@@ -92,7 +92,8 @@ async def lifespan(app: FastAPI):
                         "futures_last": ft[symbol].get("lastPrice"), "futures_quote_volume": ft[symbol].get("quoteVolume"),
                         "futures_mark": pi[symbol].get("markPrice"), "futures_index": pi[symbol].get("indexPrice"),
                         "funding_rate": pi[symbol].get("lastFundingRate"),
-                        "next_funding_time_ms": pi[symbol].get("nextFundingTime")}, now, now)
+                        "next_funding_time_ms": (int(pi[symbol]["nextFundingTime"]) - hub.clock_offsets_ms.get("futures", 0)
+                                                 if pi[symbol].get("nextFundingTime") is not None else None)}, now, now)
             last_recovery_ms = now
 
     hub.event_sink = lambda market, symbol, stream, event_ms, received_ms, payload: store.save_market_event(
