@@ -28,11 +28,12 @@ class BinanceWebSocketManager:
             self._changed.set()
 
     def _shards(self) -> list[tuple[str, list[str]]]:
-        spot = [f"{s}@bookTicker" for s in sorted(self.hub.symbols)]
-        spot += [f"{s}@ticker" for s in sorted(self.hub.symbols)]
-        futures = [f"{s}@bookTicker" for s in sorted(self.hub.symbols)]
-        futures += [f"{s}@ticker" for s in sorted(self.hub.symbols)]
-        futures += [f"{s}@markPrice@1s" for s in sorted(self.hub.symbols)]
+        symbols = [s.lower() for s in sorted(self.hub.symbols)]
+        spot = [f"{s}@bookTicker" for s in symbols]
+        spot += [f"{s}@ticker" for s in symbols]
+        futures = [f"{s}@bookTicker" for s in symbols]
+        futures += [f"{s}@ticker" for s in symbols]
+        futures += [f"{s}@markPrice@1s" for s in symbols]
         output: list[tuple[str, list[str]]] = []
         for market, url, streams in (("spot", self.spot_url, spot), ("futures", self.futures_url, futures)):
             for i in range(0, len(streams), self.streams_per_connection):
