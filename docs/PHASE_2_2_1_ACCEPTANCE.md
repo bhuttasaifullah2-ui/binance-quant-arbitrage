@@ -8,7 +8,7 @@ This document records the additional implementation on PR #5. It is not a claim 
 
 - Added app.domain.scanner_eligibility.validate_scanner_eligibility as the shared final eligibility decision.
 - Every MarketScanner candidate is passed through the gate immediately before it is persisted and appended to the eligible opportunity list.
-- The gate evaluates required Spot/Futures fields, finite positive prices and volumes, field age, WebSocket health when WebSockets are enabled, clock synchronization/drift, exchange filter completeness, funding freshness and unresolved funding gaps, theoretical hedge validation, residual exposure and visible order-book depth.
+- The gate evaluates required Spot/Futures fields, finite positive prices and volumes, field age, WebSocket health when WebSockets are enabled, clock synchronization/drift, exchange filter completeness, funding freshness, current-versus-latest-realized funding reconciliation and unresolved funding gaps, theoretical hedge validation, residual exposure and visible order-book depth.
 - Each decision includes eligible, status, checked_at_ms, stable rejection codes and human-readable explanations.
 - Early scanner pre-filter rejections are also exposed with structured codes.
 - The legacy build_opportunity helper refuses eligibility when complete gate evidence is not supplied; it cannot independently label a candidate eligible.
@@ -18,7 +18,7 @@ This document records the additional implementation on PR #5. It is not a claim 
 
 - Added persistent symbol-level state and per-scan opportunity snapshots to ValidationStore.
 - Stable identity is the strategy/symbol pair; this repository currently has one fixed Spot-long/USDⓈ-M-short strategy.
-- Persists appearance/disappearance, eligibility, rejection-code, ranking, funding, basis, liquidity, data-quality and WebSocket-health changes.
+- Persists appearance/disappearance, eligibility, rejection-code, ranking, funding, basis, liquidity, data-quality and WebSocket-health changes, including diagnostic changes for rejected symbols.
 - No change event is emitted when the compared state is unchanged.
 - State is read from SQLite after restart, so the next scan compares against persisted state rather than an empty in-memory baseline.
 - Scanner run start/end, candidate counts and expected interval are persisted when observation mode is enabled.
