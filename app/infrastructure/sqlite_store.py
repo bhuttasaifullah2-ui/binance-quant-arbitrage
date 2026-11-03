@@ -69,20 +69,20 @@ class SQLiteMarketStore:
                 inserted += cur.rowcount
         return inserted
 
-    def funding_history(self, symbol: str, limit: int = 100) -> list[dict[str, Any]]:
+    def funding_history(self, symbol: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("""SELECT symbol,funding_time_ms,funding_rate,observed_at_ms,source
-                FROM funding_observations WHERE symbol=? ORDER BY funding_time_ms DESC LIMIT ?""",
-                (symbol.upper(), limit)).fetchall()
+                FROM funding_observations WHERE symbol=? ORDER BY funding_time_ms DESC LIMIT ? OFFSET ?""",
+                (symbol.upper(), limit, offset)).fetchall()
         return [dict(row) for row in rows]
 
-    def history(self, symbol: str, limit: int = 100) -> list[dict[str, Any]]:
+    def history(self, symbol: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute("SELECT * FROM market_observations WHERE symbol=? ORDER BY observed_at_ms DESC LIMIT ?",
-                                (symbol.upper(), limit)).fetchall()
+            rows = conn.execute("SELECT * FROM market_observations WHERE symbol=? ORDER BY observed_at_ms DESC LIMIT ? OFFSET ?",
+                                (symbol.upper(), limit, offset)).fetchall()
         return [dict(row) for row in rows]
 
-    def latest(self, limit: int = 100) -> list[dict[str, Any]]:
+    def latest(self, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("""SELECT m.* FROM market_observations m
                 JOIN (SELECT symbol, MAX(observed_at_ms) ts FROM market_observations GROUP BY symbol) x
