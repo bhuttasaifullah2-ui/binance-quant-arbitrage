@@ -17,6 +17,7 @@ from app.services.market_scanner import MarketScanner
 from app.services.websocket_manager import BinanceWebSocketManager
 from app.services.live_validation import LiveValidationService
 from app.infrastructure.validation_store import ValidationStore
+from app.infrastructure.session_evidence_store import SessionEvidenceStore
 from app.api.validation import router as validation_router
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ async def lifespan(app: FastAPI):
         health_sink=lambda market, health, now_ms: store.save_ws_health(market, health, now_ms),
         event_sink=lambda at_ms, kind, symbol, status, payload: validation_store.event(at_ms, kind, symbol, status, payload))
     scanner = MarketScanner(client, store, settings, hub, websocket_manager)
-    validation_store = ValidationStore(settings.database_path, settings.retention_days)
+    validation_store = SessionEvidenceStore(settings.database_path, ValidationStore(settings.database_path, settings.retention_days))
     scanner.observation_store = validation_store
     validator = LiveValidationService(client, hub, websocket_manager, validation_store,
         settings.max_clock_drift_ms, settings.max_validation_message_age_ms,
@@ -173,6 +174,7 @@ async def lifespan(app: FastAPI):
                 await ws_task
             except asyncio.CancelledError:
                 pass
+        validation_store.close_session("COMPLETED")
         await client.close()
 
 
