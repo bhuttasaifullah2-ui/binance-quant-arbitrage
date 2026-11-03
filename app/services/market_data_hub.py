@@ -9,12 +9,18 @@ class MarketDataHub:
         self.states: dict[str, SymbolMarketState] = {}
         self.symbols: set[str] = set()
         self.max_clock_skew_ms = max_clock_skew_ms
+        self.clock_offsets_ms: dict[str, int] = {}
+        self.clock_sync_at_ms: int | None = None
         self.health: dict[str, dict[str, Any]] = {}
         self.quality_events: list[dict[str, Any]] = []
         self._last_update_ids: dict[str, int] = {}
 
     def set_symbols(self, symbols: set[str]) -> None:
         self.symbols = set(symbols)
+
+    def set_clock_offset(self, market: str, offset_ms: int, synced_at_ms: int) -> None:
+        self.clock_offsets_ms[market] = offset_ms
+        self.clock_sync_at_ms = synced_at_ms
 
     def _state(self, symbol: str) -> SymbolMarketState:
         return self.states.setdefault(symbol.upper(), SymbolMarketState(symbol.upper()))
@@ -28,7 +34,10 @@ class MarketDataHub:
         if not symbol:
             return False
         now = received_at_ms or int(time.time() * 1000)
+        market_hint = str(message.get("_market", data.get("_market", ""))).lower()
         event_ms = int(data.get("E", data.get("T", 0)) or 0)
+        if event_ms > 0 and market_hint in self.clock_offsets_ms:
+            event_ms -= self.clock_offsets_ms[market_hint]
         if event_ms <= 0 and "bookticker" in stream.lower():
             event_ms = now
             update_id = int(data.get("u", 0) or 0)
@@ -47,7 +56,6 @@ class MarketDataHub:
             return False
         values: dict[str, Any] = {}
         stream_name = stream.lower()
-        market_hint = str(message.get("_market", data.get("_market", ""))).lower()
         if "bookticker" in stream_name or ("b" in data and "a" in data and "B" in data and "A" in data):
             market = "spot" if market_hint == "spot" else "futures"
             stream_name = f"{market}:bookticker"
@@ -99,4 +107,5 @@ class MarketDataHub:
 
     def stream_health(self) -> dict[str, Any]:
         return {"streams": self.health, "symbol_count": len(self.symbols),
+                "clock_offsets_ms": self.clock_offsets_ms, "clock_sync_at_ms": self.clock_sync_at_ms,
                 "live_trading_enabled": False}
