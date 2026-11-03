@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     max_recovery_duration_ms: int = 60000
     max_message_processing_latency_ms: float = 100.0
     max_stale_symbols: int = 5
+    funding_reconciliation_tolerance: str = "0.00000001"
     live_trading_enabled: bool = False
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
