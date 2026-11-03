@@ -94,7 +94,10 @@ class LiveValidationService:
             streams['streams'] = {k: dict(value) for k, value in self.websocket_manager.metrics.items()}
         now=int(time.time()*1000)
         for market,item in streams.get("streams",{}).items():
-            age=item.get("last_event_age_ms")
+            last_message=item.get("last_message_ms",item.get("last_event_ms"))
+            age=None if last_message is None else max(0,now-int(last_message))
+            item["last_message_age_ms"]=age
+            item["current_uptime_ms"]=item.get("uptime_ms",0)+(max(0,now-self.websocket_manager._connected_since.get(market,now)) if item.get("connected") else 0)
             item["status"]="HEALTHY" if item.get("connected") and age is not None and age<=self.max_message_age_ms else "STALE"
             item["checked_at_ms"]=now
         return {"checked_at_ms":now,"status":"HEALTHY" if all(x.get("status")=="HEALTHY" for x in streams.get("streams",{}).values()) and streams.get("streams") else "WARNING",
