@@ -49,10 +49,12 @@ async def lifespan(app: FastAPI):
         settings.request_timeout_seconds, settings.request_max_retries,
         settings.retry_base_seconds, settings.max_concurrent_requests)
     store = SQLiteMarketStore(settings.database_path, settings.retention_days)
-    hub = MarketDataHub(settings.max_clock_skew_ms)
+    hub = MarketDataHub(settings.max_clock_skew_ms, settings.max_data_age_seconds*1000)
     try:
-        local_now = int(time.time()*1000)
-        spot_time, futures_time = await asyncio.gather(client.spot_server_time(), client.futures_server_time())
+        local_before = int(time.time()*1000)
+        spot_time, futures_time = await asyncio.wait_for(
+            asyncio.gather(client.spot_server_time(), client.futures_server_time()), timeout=5)
+        local_now = (local_before + int(time.time()*1000)) // 2
         hub.set_clock_offset("spot", int(spot_time["serverTime"])-local_now, local_now)
         hub.set_clock_offset("futures", int(futures_time["serverTime"])-local_now, local_now)
     except (BinanceAPIError, KeyError, ValueError, TypeError):
