@@ -160,6 +160,12 @@ class SQLiteMarketStore:
                                 (limit,)).fetchall()
         return [dict(x) for x in rows]
 
+    def latest_funding_time(self, symbol: str) -> int | None:
+        with self._connect() as conn:
+            row = conn.execute("SELECT MAX(funding_time_ms) AS ts FROM funding_observations WHERE symbol=?",
+                               (symbol.upper(),)).fetchone()
+        return None if row is None or row["ts"] is None else int(row["ts"])
+
     def funding_history(self, symbol: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("""SELECT symbol,funding_time_ms,funding_rate,observed_at_ms,source
