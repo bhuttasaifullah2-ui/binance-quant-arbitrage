@@ -31,9 +31,18 @@ class SymbolMarketState:
             self.out_of_order_events += 1
             return False
         self.last_event_by_stream[stream] = event_time_ms
+        accepted = 0
         for name, value in values.items():
-            if value is not None:
-                self.fields[name] = FieldValue(value, event_time_ms, received_at_ms, source)
+            if value is None:
+                continue
+            previous_field = self.fields.get(name)
+            if previous_field is not None and event_time_ms < previous_field.event_time_ms:
+                self.out_of_order_events += 1
+                continue
+            self.fields[name] = FieldValue(value, event_time_ms, received_at_ms, source)
+            accepted += 1
+        if accepted == 0:
+            return False
         return True
 
     def freshness(self, now_ms: int, max_age_ms: int, required: tuple[str, ...]) -> dict[str, Any]:
