@@ -6,7 +6,7 @@
 - A MarketDataHub normalizes Spot bookTicker/ticker and USD-M Futures bookTicker/ticker/markPrice@1s events.
 - BinanceWebSocketManager shards combined subscriptions, lowercases symbols, reconnects with exponential backoff, relies on the WebSocket library's ping/pong handling, and rebuilds shards when the eligible symbol universe changes.
 - On each connection/reconnection, a rate-throttled bulk REST recovery snapshot refreshes the active symbol universe.
-- Once the hub has a complete snapshot for the current universe, the scanner reads normalized hub state instead of polling all tickers each cycle. It continues to refresh reference metadata hourly and requests bounded depth/history for shortlisted symbols.
+- With WebSockets enabled, the scanner performs one REST bulk bootstrap, then reads normalized per-symbol hub state on subsequent cycles instead of repeatedly polling all tickers. Missing/stale symbols are rejected; reconnect recovery refreshes the active universe. It continues to refresh reference metadata hourly and requests bounded depth/history for shortlisted symbols.
 - Event time is corrected using startup Spot/Futures server-time offsets. Delayed/future events, duplicate update IDs, duplicate events, out-of-order events, and stale per-field values are rejected or marked.
 
 ## WebSocket configuration
