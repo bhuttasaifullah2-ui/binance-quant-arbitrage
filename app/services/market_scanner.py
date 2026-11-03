@@ -418,6 +418,8 @@ class MarketScanner:
                             "clock_offsets_ms": self.market_hub.clock_offsets_ms if self.market_hub else {},
                             "max_clock_drift_ms": getattr(self.config, "max_clock_drift_ms", self.config.max_clock_skew_ms),
                             "clock_sync_required": True,
+                            "clock_sync_age_ms": None if self.market_hub is None or self.market_hub.clock_sync_at_ms is None else max(0, now-self.market_hub.clock_sync_at_ms),
+                            "max_clock_sync_age_ms": int(getattr(self.config, "max_clock_sync_age_seconds", 300))*1000,
                             "spot_filters_valid": spot_filter_ok, "futures_filters_valid": futures_filter_ok,
                             "funding_age_ms": funding_age, "max_funding_age_ms": self.config.max_data_age_seconds*1000,
                             "funding_gaps": history_gaps, "funding_inconsistent": not funding_consistent,
