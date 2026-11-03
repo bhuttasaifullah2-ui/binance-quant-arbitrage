@@ -109,6 +109,7 @@ async def lifespan(app: FastAPI):
         event_sink=lambda at_ms, kind, symbol, status, payload: validation_store.event(at_ms, kind, symbol, status, payload))
     scanner = MarketScanner(client, store, settings, hub, websocket_manager)
     validation_store = ValidationStore(settings.database_path, settings.retention_days)
+    scanner.observation_store = validation_store
     validator = LiveValidationService(client, hub, websocket_manager, validation_store,
         settings.max_clock_drift_ms, settings.max_validation_message_age_ms,
         settings.websocket_probe_timeout_seconds, settings.max_reconnect_attempts,
