@@ -310,8 +310,15 @@ class MarketScanner:
                         stats = summarize_funding(funding_obs)
                         funding_interval = detect_funding_interval_hours([x.funding_time_ms for x in funding_obs])
                         history_gaps = funding_history_gaps(funding_obs, funding_interval)
+                        latest_history = max(funding_obs, key=lambda x: x.funding_time_ms) if funding_obs else None
+                        funding_consistent = (latest_history is not None and
+                            abs(funding-latest_history.funding_rate) <= _d(getattr(self.config, "funding_reconciliation_tolerance", "0.00000001")))
                         if history_gaps:
-                            self._reject(symbol, f"historical funding gaps detected:{len(history_gaps)}", now)
+                            self._reject(symbol, f"historical funding gaps detected:{len(history_gaps)}", now,
+                                         "FUNDING_HISTORY_INCONSISTENT")
+                        if not funding_consistent:
+                            self._reject(symbol, "current observed funding does not reconcile with latest realized settlement",
+                                         now, "FUNDING_HISTORY_INCONSISTENT")
                         bps = basis_bps(spot_buy.vwap, fut_sell.vwap)
                         basis_penalty = abs(bps)/Decimal("10000")*matched_notional*_d(self.config.basis_risk_haircut)
                         net = gross_funding - entry_fees - exit_fees - slippage_cost - basis_penalty
@@ -413,7 +420,7 @@ class MarketScanner:
                             "clock_sync_required": True,
                             "spot_filters_valid": spot_filter_ok, "futures_filters_valid": futures_filter_ok,
                             "funding_age_ms": funding_age, "max_funding_age_ms": self.config.max_data_age_seconds*1000,
-                            "funding_gaps": history_gaps, "funding_inconsistent": False,
+                            "funding_gaps": history_gaps, "funding_inconsistent": not funding_consistent,
                             "hedge_valid": bool(hedge.get("executable")) and not actual_validation,
                             "residual_exposure_usdt": hedge.get("residual_directional_exposure"),
                             "max_residual_exposure_usdt": matched_notional*_d(self.config.max_hedge_mismatch),
