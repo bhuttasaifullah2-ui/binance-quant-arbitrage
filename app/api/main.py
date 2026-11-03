@@ -57,7 +57,7 @@ async def lifespan(app: FastAPI):
         local_now = (local_before + int(time.time()*1000)) // 2
         hub.set_clock_offset("spot", int(spot_time["serverTime"])-local_now, local_now)
         hub.set_clock_offset("futures", int(futures_time["serverTime"])-local_now, local_now)
-    except (BinanceAPIError, KeyError, ValueError, TypeError):
+    except (BinanceAPIError, KeyError, ValueError, TypeError, TimeoutError):
         logger.warning("Could not synchronize Binance exchange clocks; using local receive timestamps")
     recovery_lock = asyncio.Lock()
     last_recovery_ms = 0
@@ -71,6 +71,7 @@ async def lifespan(app: FastAPI):
             now = int(time.time()*1000)
             if now - last_recovery_ms < 5000:
                 return
+            last_recovery_ms = now
             spot_books, spot_tickers, fut_books, fut_tickers, premium = await asyncio.gather(
                 client.spot_book_ticker(), client.spot_ticker_24h(),
                 client.futures_book_ticker(), client.futures_ticker_24h(),
