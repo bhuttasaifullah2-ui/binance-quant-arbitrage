@@ -27,6 +27,7 @@ class BinanceWebSocketManager:
         self.metrics: dict[str, dict[str, Any]] = {}
         self._connected_since: dict[str, int] = {}
         self._recovery_started: dict[str, int] = {}
+        self._connected_shards: dict[str, set[str]] = {"spot": set(), "futures": set()}
 
     def _metric(self, market: str) -> dict[str, Any]:
         return self.metrics.setdefault(market, {"connected": False, "disconnect_count": 0,
@@ -86,15 +87,21 @@ class BinanceWebSocketManager:
                 async with websockets.connect(endpoint, ping_interval=20, ping_timeout=20,
                                                close_timeout=5, max_size=2**20) as ws:
                     now = int(time.time() * 1000)
-                    if metric["disconnect_count"]:
+                    shard_key = streams[0] if streams else "empty"
+                    connected_shards = self._connected_shards.setdefault(market, set())
+                    market_was_down = not connected_shards
+                    if metric["disconnect_count"] and metric["reconnect_attempts"]:
                         metric["reconnect_count"] += 1
-                        metric["consecutive_failures"] = 0
-                        metric["recovery_durations_ms"].append(max(0, now-self._recovery_started[market]))
+                    metric["consecutive_failures"] = 0
+                    connected_shards.add(shard_key)
+                    if market_was_down and metric["disconnect_count"]:
+                        duration = max(0, now-self._recovery_started.get(market, now))
+                        metric["recovery_durations_ms"].append(duration)
                         metric["recovery_durations_ms"] = metric["recovery_durations_ms"][-100:]
                         if self.event_sink:
                             self.event_sink(now, "WEBSOCKET_RECOVERED", None, "HEALTHY",
-                                {"market": market, "recovery_duration_ms": metric["recovery_durations_ms"][-1]})
-                    elif self.event_sink:
+                                {"market": market, "recovery_duration_ms": duration})
+                    elif market_was_down and self.event_sink:
                         self.event_sink(now, "WEBSOCKET_CONNECTED", None, "HEALTHY", {"market": market})
                     self._connected_since[market] = now
                     self._set_health(market, {"connected": True, "streams": len(streams),
@@ -132,12 +139,17 @@ class BinanceWebSocketManager:
                 now = int(time.time() * 1000)
                 metric["disconnect_count"] += 1
                 metric["consecutive_failures"] += 1
-                metric["subscription_status"] = "DISCONNECTED"
-                self._recovery_started[market] = now
-                if self.event_sink:
-                    self.event_sink(now, "WEBSOCKET_DISCONNECTED", None, "UNHEALTHY",
-                                    {"market": market, "error": type(exc).__name__})
-                self._set_health(market, {"connected": False, "error": type(exc).__name__})
+                shard_key = streams[0] if streams else "empty"
+                connected_shards = self._connected_shards.setdefault(market, set())
+                connected_shards.discard(shard_key)
+                market_disconnected = not connected_shards
+                metric["subscription_status"] = "DISCONNECTED" if market_disconnected else "SUBSCRIBED"
+                if market_disconnected:
+                    self._recovery_started[market] = now
+                    if self.event_sink:
+                        self.event_sink(now, "WEBSOCKET_DISCONNECTED", None, "UNHEALTHY",
+                                        {"market": market, "error": type(exc).__name__})
+                self._set_health(market, {"connected": not market_disconnected, "error": type(exc).__name__})
                 logger.warning("%s websocket reconnecting after %s", market, type(exc).__name__)
                 try:
                     await asyncio.wait_for(self._stop.wait(), timeout=delay)
