@@ -54,7 +54,7 @@ class MarketDataHub:
         else:
             return False
         market = "spot" if stream_name.startswith("spot:") else "futures"
-        key = f"{market}:{stream_name}"
+        key = stream_name
         accepted = self._state(symbol).apply(key, event_ms, now, values)
         if not accepted:
             self.quality_events.append({"symbol": symbol, "reason": "duplicate_or_out_of_order", "stream": key})
