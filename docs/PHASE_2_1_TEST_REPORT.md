@@ -27,3 +27,22 @@ Merge commit:
 04f03f16979af923ac420ffa93c70dd3961089b9
 
 The system remains strictly read-only. WebSocket streaming and observation mode are opt-in.
+
+
+## Follow-up scanner correctness run
+
+A follow-up PR corrected the WebSocket bootstrap behavior so the scanner uses one REST bulk bootstrap, then consumes normalized per-symbol hub state and rejects stale/missing fields instead of repeatedly polling all tickers.
+
+- Pull request: #4 (merged)
+- CI run: #40
+- Run ID: 41580273403
+- Tested head: e46ec0d18ac8d99bd62e22c47884e0d585a60f14
+- Python 3.12: **36 passed, 1 skipped in 0.54s**
+- Python 3.13: **36 passed, 1 skipped in 0.44s**
+- Additional regression test: verifies the scanner performs only one bulk REST bootstrap in WebSocket mode.
+
+Follow-up merge commit:
+e93cef7fa48dc904cf346c9cea701bb435d09beb
+
+Workflow URL:
+https://github.com/bhuttasaifullah2-ui/binance-quant-arbitrage/actions/runs/41580273403
