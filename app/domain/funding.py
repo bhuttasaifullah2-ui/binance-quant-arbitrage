@@ -45,7 +45,10 @@ def summarize_funding(observations: list[FundingObservation]) -> dict[str, Decim
         recent_trend = Decimal("0")
     positive_fraction = Decimal(positive) / n
     return {
-        "count": n, "mean": mean, "median": Decimal(str(median(rates))),
+        mid_index = n // 2
+    median_rate = rates[mid_index] if n % 2 else (rates[mid_index-1] + rates[mid_index]) / 2
+    return {
+        "count": n, "mean": mean, "median": median_rate,
         "min": min(rates), "max": max(rates),
         "negative_fraction": Decimal(negative) / n,
         "positive_fraction": positive_fraction,
