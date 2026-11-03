@@ -112,11 +112,17 @@ class BinancePublicClient:
     async def futures_funding_info(self) -> list[dict[str, Any]]:
         return await self._get("futures", "/fapi/v1/fundingInfo")
 
-    async def futures_funding_history(self, symbol: str, limit: int = 100) -> list[dict[str, Any]]:
+    async def futures_funding_history(self, symbol: str, limit: int = 100,
+                                      start_time_ms: int | None = None,
+                                      end_time_ms: int | None = None) -> list[dict[str, Any]]:
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
-        return await self._get("futures", "/fapi/v1/fundingRate",
-                               {"symbol": symbol, "limit": limit})
+        params: dict[str, Any] = {"symbol": symbol, "limit": limit}
+        if start_time_ms is not None:
+            params["startTime"] = start_time_ms
+        if end_time_ms is not None:
+            params["endTime"] = end_time_ms
+        return await self._get("futures", "/fapi/v1/fundingRate", params)
 
     async def futures_depth(self, symbol: str, limit: int = 20) -> dict[str, Any]:
         return await self._get("futures", "/fapi/v1/depth", {"symbol": symbol, "limit": limit})
@@ -126,3 +132,6 @@ class BinancePublicClient:
 
     async def futures_server_time(self) -> dict[str, Any]:
         return await self._get("futures", "/fapi/v1/time")
+
+    async def spot_server_time(self) -> dict[str, Any]:
+        return await self._get("spot", "/api/v3/time")
