@@ -388,8 +388,16 @@ class MarketScanner:
                                     metric.get("subscription_status") == "SUBSCRIBED"}
                         else:
                             ws_feeds = {"spot": {"healthy": True}, "futures": {"healthy": True}}
-                        spot_filter_ok = spot_filter.status == "TRADING" and not spot_filter.validate(hedge["spot_quantity"], spot_buy.vwap)
-                        futures_filter_ok = futures_filter.status == "TRADING" and not futures_filter.validate(hedge["futures_quantity"], fut_sell.vwap)
+                        spot_filter_ok = (spot_filter.status == "TRADING" and
+                            spot_filter.step_size > 0 and spot_filter.market_step_size > 0 and
+                            spot_filter.min_qty > 0 and spot_filter.tick_size > 0 and
+                            spot_filter.min_notional > 0 and
+                            not spot_filter.validate(hedge["spot_quantity"], spot_buy.vwap))
+                        futures_filter_ok = (futures_filter.status == "TRADING" and
+                            futures_filter.step_size > 0 and futures_filter.market_step_size > 0 and
+                            futures_filter.min_qty > 0 and futures_filter.tick_size > 0 and
+                            futures_filter.min_notional > 0 and
+                            not futures_filter.validate(hedge["futures_quantity"], fut_sell.vwap))
                         gate = validate_scanner_eligibility(symbol, now, {
                             "market_fields": {"spot_bid": spot_bid, "spot_ask": spot_ask,
                                 "spot_last": st.get("lastPrice"), "spot_quote_volume": sv,
@@ -402,7 +410,7 @@ class MarketScanner:
                             "websocket_enabled": bool(self.config.websocket_enabled), "websocket_feeds": ws_feeds,
                             "clock_offsets_ms": self.market_hub.clock_offsets_ms if self.market_hub else {},
                             "max_clock_drift_ms": getattr(self.config, "max_clock_drift_ms", self.config.max_clock_skew_ms),
-                            "clock_sync_required": bool(self.config.websocket_enabled or self.config.live_validation_enabled),
+                            "clock_sync_required": True,
                             "spot_filters_valid": spot_filter_ok, "futures_filters_valid": futures_filter_ok,
                             "funding_age_ms": funding_age, "max_funding_age_ms": self.config.max_data_age_seconds*1000,
                             "funding_gaps": history_gaps, "funding_inconsistent": False,
