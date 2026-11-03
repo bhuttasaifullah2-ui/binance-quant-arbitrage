@@ -136,6 +136,8 @@ class LiveValidationService:
                 "stale_fields":stale,"field_age_ms":ages,"eligible":status=="HEALTHY",
                 "checked_at_ms":now}
         stale_count=sum(1 for x in symbols.values() if x["status"] in {"STALE","MISSING","INVALID"})
+        if hasattr(self.store, "record_data_quality"):
+            self.store.record_data_quality(now, symbols)
         return {"checked_at_ms":now,"symbols":symbols,"symbol_count":len(symbols),"stale_symbol_count":stale_count,
             "max_stale_symbols_threshold":self.max_stale_symbols,
             "eligible_symbol_count":sum(1 for x in symbols.values() if x["eligible"]),
