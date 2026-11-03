@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-from app.domain.funding import summarize_funding
+from app.domain.funding import summarize_funding, detect_funding_interval_hours
 from app.domain.market_quality import estimate_market_slippage, basis_bps
 from app.domain.models import FundingObservation
 from app.domain.profitability import CostModel, estimate_net_funding
@@ -40,6 +40,10 @@ class MarketScanner:
         self.last_valid_count = 0
         self._opportunities: list[dict[str, Any]] = []
         self._running = False
+
+    @property
+    def opportunities(self) -> list[dict[str, Any]]:
+        return list(self._opportunities)
 
     async def scan_once(self) -> list[dict[str, Any]]:
         async with self._lock:
@@ -119,6 +123,8 @@ class MarketScanner:
                         funding_obs=[FundingObservation(symbol,_d(x["fundingRate"]),int(x["fundingTime"]))
                                      for x in hist if "fundingRate" in x and "fundingTime" in x]
                         stats=summarize_funding(funding_obs)
+                        self.store.save_funding_observations(symbol, hist, now)
+                        funding_interval = detect_funding_interval_hours([x.funding_time_ms for x in funding_obs])
                         spot_depth=sum((_d(p)*_d(q) for p,q in sd["bids"][:self.config.depth_levels]),Decimal("0")) + sum((_d(p)*_d(q) for p,q in sd["asks"][:self.config.depth_levels]),Decimal("0"))
                         fut_depth=sum((_d(p)*_d(q) for p,q in fd["bids"][:self.config.depth_levels]),Decimal("0")) + sum((_d(p)*_d(q) for p,q in fd["asks"][:self.config.depth_levels]),Decimal("0"))
                         bps=basis_bps(spot_ask,mark)
@@ -148,10 +154,11 @@ class MarketScanner:
                         self.store.save_observation(row)
                         out.append({"symbol":symbol,"score":str(score),"funding_rate":str(funding),
                             "funding_history":{k:str(v) for k,v in stats.items()},
-                            "next_funding_time_ms":next_funding,"funding_interval_hours":8,
+                            "next_funding_time_ms":next_funding,"funding_interval_hours":funding_interval,
                             "spot_price":str(spot_ask),"futures_mark":str(mark),
                             "spot_volume_24h_usdt":str(sv),"futures_volume_24h_usdt":str(fv),
-                            "spot_spread_bps":str(row["spot_slippage_bps"]),"futures_spread_bps":str(row["futures_slippage_bps"]),
+                            "spot_spread_bps":str((spot_ask-spot_bid)/((spot_ask+spot_bid)/2)*Decimal("10000")),
+                            "futures_spread_bps":str((fut_ask-fut_bid)/((fut_ask+fut_bid)/2)*Decimal("10000")),
                             "spot_depth_usdt":str(spot_depth),"futures_depth_usdt":str(fut_depth),
                             "estimated_slippage_bps":str(sum(slips,Decimal("0"))),
                             "basis_bps":str(bps),"gross_funding_usdt":str(profit.gross_funding),
