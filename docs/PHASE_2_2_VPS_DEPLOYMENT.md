@@ -18,25 +18,32 @@ Deploy the reviewed Git commit into /opt/binance-quant-arbitrage, then:
     sudo -u quantbot /opt/binance-quant-arbitrage/.venv/bin/pip install -e '/opt/binance-quant-arbitrage[dev]'
 
 ## Environment
-Create /etc/binance-quant-arbitrage.env readable only by the service user:
+Create /etc/binance-quant-arbitrage.env readable only by the service user. Keep existing opt-in settings false unless separately approved:
+
     APP_ENV=production
     APP_MODE=RESEARCH
     DATABASE_PATH=/var/lib/binance-quant-arbitrage/market_data.sqlite3
     RETENTION_DAYS=30
-    WEBSOCKET_ENABLED=true
-    OBSERVATION_MODE=true
-    LIVE_VALIDATION_ENABLED=true
-    VALIDATION_INTERVAL_SECONDS=300
-    MAX_CLOCK_DRIFT_MS=5000
-    MAX_VALIDATION_MESSAGE_AGE_MS=15000
-    MAX_RECONNECT_ATTEMPTS=10
-    MAX_RECOVERY_DURATION_MS=60000
-    MAX_MESSAGE_PROCESSING_LATENCY_MS=100
-    MAX_STALE_SYMBOLS=5
-    REQUEST_TIMEOUT_SECONDS=10
-    REQUEST_MAX_RETRIES=3
+    WEBSOCKET_ENABLED=false
+    OBSERVATION_MODE=false
+    LIVE_VALIDATION_ENABLED=false
+    LIVE_TRADING_ENABLED=false
 
-All Binance requests are public and unauthenticated. Do not add API keys. Keep the three opt-in settings false unless intentionally starting observation. LIVE_TRADING_ENABLED is not a supported execution control and must remain false if present in legacy configuration.
+All Binance requests are public and unauthenticated. Do not add API keys. LIVE_TRADING_ENABLED must remain false.
+
+## Research dashboard
+The dashboard is served by the existing FastAPI process at GET /dashboard; no second service, frontend build step, database or new port is required. It reads existing endpoints using GET requests only and refreshes every 15 seconds. It does not call validation POST endpoints or initiate scans, validation probes, WebSocket connections or observation mode.
+
+Local verification on the VPS:
+
+    curl --fail http://127.0.0.1:8000/dashboard
+    curl --fail http://127.0.0.1:8000/api/v1/health
+
+For remote viewing, use an authenticated VPN or an SSH local port forward to loopback. Example from an operator workstation:
+
+    ssh -L 8000:127.0.0.1:8000 -p SSH_PORT USER@VPS_HOST
+
+Then open http://127.0.0.1:8000/dashboard locally. Substitute the operator's SSH connection details. Do not bind Uvicorn to 0.0.0.0, expose port 8000, change firewall rules or add an unauthenticated public reverse proxy. The application API has no authentication middleware.
 
 ## Session lifecycle and restart behavior
 - Each application process creates a new UUID session in the same SQLite database; sessions are never resumed or merged.
@@ -49,6 +56,7 @@ All Binance requests are public and unauthenticated. Do not add API keys. Keep t
 
 ## systemd
 Create /etc/systemd/system/binance-quant-arbitrage.service:
+
     [Unit]
     Description=Binance Quant Arbitrage — read-only observer
     After=network-online.target
@@ -74,18 +82,17 @@ Create /etc/systemd/system/binance-quant-arbitrage.service:
     [Install]
     WantedBy=multi-user.target
 
-Then run systemctl daemon-reload and systemctl enable --now binance-quant-arbitrage.
+Run systemctl daemon-reload and systemctl enable --now only under a separately approved deployment procedure. Do not change service startup or boot enablement as part of dashboard implementation.
 
-Bind to loopback. Do not expose port 8000 directly to the internet; place it behind authenticated VPN/reverse proxy access and TLS if remote access is required. No authentication middleware is included in this phase.
+Bind to loopback. Do not expose port 8000 directly to the internet; use authenticated VPN access if remote access is required. No authentication middleware is included in this phase.
 
 ## Smoke test and evidence capture
-1. Confirm the deployed commit SHA and record the three opt-in flags.
-2. Start service and inspect /api/v1/health, /api/v1/validation/summary and /api/v1/observation/sessions.
-3. Record the newly created session_id. Run a 30–60 minute smoke test.
-4. Export its JSON report and preserve the raw file with the deployment commit/configuration.
-5. Restart the service. Confirm the prior session is INTERRUPTED if shutdown was unclean, or COMPLETED if shutdown was graceful; confirm the new process has a different session_id.
-6. If the smoke test is healthy, run an extended observation in a separate session.
-7. Document DNS/network interruptions, REST failures, WebSocket disconnect/recovery events, clock warnings, stale/missing fields, unresolved funding gaps and scanner rejections.
+1. Confirm deployed commit SHA and record opt-in flags.
+2. Start the service only after approval and inspect health, validation summary and observation sessions.
+3. Record the new session_id. Run a 30–60 minute smoke test.
+4. Export its JSON report and preserve the raw file with deployment commit/configuration.
+5. Restart only after approval. Confirm the prior session is INTERRUPTED if shutdown was unclean, or COMPLETED if graceful; confirm a new session_id.
+6. Document DNS/network interruptions, REST failures, WebSocket disconnect/recovery events, clock warnings, stale/missing fields, unresolved funding gaps and scanner rejections.
 
 ## Health, logs and shutdown
 - curl http://127.0.0.1:8000/api/v1/health
@@ -94,7 +101,7 @@ Bind to loopback. Do not expose port 8000 directly to the internet; place it beh
 - systemctl stop binance-quant-arbitrage requests graceful shutdown.
 
 ## Backup and upgrade
-Stop the service before copying SQLite database and WAL/SHM companions, or use SQLite online backup API. Keep encrypted off-host backups and test restore. For upgrades: stop service, back up database, deploy reviewed commit, install dependencies, run python -m compileall -q app tests and pytest -q, start service, check health and validation endpoints, and retain previous release for rollback.
+Stop the service before copying SQLite database and WAL/SHM companions, or use SQLite online backup API. Keep encrypted off-host backups and test restore. For upgrades: stop service, back up database, deploy reviewed commit, install dependencies, run python -m compileall -q app tests and pytest -q, start service, check health and retain previous release for rollback.
 
 ## Constraints and troubleshooting
 Public REST/WebSocket limits are exchange-controlled. Reconnects, slow DNS, VPS clock drift, network egress filtering and rate limits can degrade feeds. The validator reports failures; it cannot guarantee Binance availability. If Spot/Futures data is stale or clock status is warning, do not treat opportunities as eligible. Observation mode records estimates only. There is no account/balance/margin/liquidation visibility and no execution.
