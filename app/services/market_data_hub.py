@@ -1,6 +1,6 @@
 """In-memory normalized feed state shared by scanner and monitoring APIs."""
 import time
-from typing import Any
+from typing import Any, Callable
 from app.domain.market_data import SymbolMarketState
 
 
@@ -14,6 +14,8 @@ class MarketDataHub:
         self.health: dict[str, dict[str, Any]] = {}
         self.quality_events: list[dict[str, Any]] = []
         self._last_update_ids: dict[str, int] = {}
+        self._last_persist_ms: dict[str, int] = {}
+        self.event_sink: Callable[[str, str, str, int, int, dict[str, Any]], None] | None = None
 
     def set_symbols(self, symbols: set[str]) -> None:
         self.symbols = set(symbols)
@@ -77,6 +79,11 @@ class MarketDataHub:
         accepted = self._state(symbol).apply(key, event_ms, now, values)
         if not accepted:
             self.quality_events.append({"symbol": symbol, "reason": "duplicate_or_out_of_order", "stream": key})
+        elif self.event_sink:
+            persist_key = f"{market}:{symbol}:{key}"
+            if now - self._last_persist_ms.get(persist_key, 0) >= 10000:
+                self.event_sink(market, symbol, key, event_ms, now, values)
+                self._last_persist_ms[persist_key] = now
         return accepted
 
     def apply_rest(self, symbol: str, stream: str, values: dict[str, Any],
