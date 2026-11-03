@@ -36,9 +36,13 @@ class SymbolMarketState:
             if value is None:
                 continue
             previous_field = self.fields.get(name)
-            if previous_field is not None and event_time_ms < previous_field.event_time_ms:
-                self.out_of_order_events += 1
-                continue
+            if previous_field is not None:
+                if received_at_ms < previous_field.received_at_ms:
+                    self.out_of_order_events += 1
+                    continue
+                if source == "websocket" and previous_field.source == "websocket" and event_time_ms < previous_field.event_time_ms:
+                    self.out_of_order_events += 1
+                    continue
             self.fields[name] = FieldValue(value, event_time_ms, received_at_ms, source)
             accepted += 1
         if accepted == 0:
