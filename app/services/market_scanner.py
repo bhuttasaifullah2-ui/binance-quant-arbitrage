@@ -508,7 +508,7 @@ class MarketScanner:
                             self._opportunities, self._eligibility_decisions, self.last_scan_ms, ws_status)
                         self.observation_store.record_scan(
                             started, self.last_scan_ms, self.last_pair_count,
-                            len(self._opportunities), len(self._rejections),
+                            len(self._opportunities), len({x["symbol"] for x in self._rejections}),
                             max(1000, int(self.config.scan_interval_seconds) * 1000))
                     else:
                         for symbol in sorted(current_symbols - self._observed_symbols):
@@ -531,7 +531,8 @@ class MarketScanner:
                                             0, len(self._rejections), self.last_error)
                 if self.config.observation_mode and self.observation_store is not None:
                     self.observation_store.record_scan(
-                        started, failed_at, self.last_pair_count, 0, len(self._rejections),
+                        started, failed_at, self.last_pair_count, 0,
+                        len({x["symbol"] for x in self._rejections}),
                         max(1000, int(self.config.scan_interval_seconds) * 1000))
                 logger.exception("Market scan failed")
                 return []
