@@ -37,10 +37,11 @@ async def profitability(request: Request): return _service(request).profitabilit
 async def run_profitability(request: Request,notional: str="1000"): return _service(request).validate_profitability(notional)
 @router.get("/api/v1/observation/events")
 async def observation_events(request: Request,limit: int=Query(200,ge=1,le=2000)):
-    return {"items":request.app.state.validation_store.events(limit),"count":len(request.app.state.validation_store.events(limit))}
+    items = request.app.state.validation_store.events(limit)
+    return {"items": items, "count": len(items)}
 @router.get("/api/v1/observation/report")
 async def observation_report(request: Request):
-    return request.app.state.validation_store.report()
+    return request.app.state.validation_store.statistical_report()
 
 
 @router.get("/api/v1/scanner/eligibility")
