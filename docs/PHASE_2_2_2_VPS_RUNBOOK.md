@@ -289,8 +289,7 @@ After identifying the session UUID from `/api/v1/observation/sessions`, set it e
 SESSION_ID='<paste-session-uuid-here>'
 curl --fail --silent --show-error \
   "http://127.0.0.1:8000/api/v1/observation/sessions/$SESSION_ID/report.json" \
-  -o "/var/lib/binance-quant-arbitrage/session-$SESSION_ID.json"
-sudo chown quantbot:quantbot "/var/lib/binance-quant-arbitrage/session-$SESSION_ID.json"
+  | sudo -u quantbot tee "/var/lib/binance-quant-arbitrage/session-$SESSION_ID.json" >/dev/null
 sudo chmod 0600 "/var/lib/binance-quant-arbitrage/session-$SESSION_ID.json"
 ```
 
