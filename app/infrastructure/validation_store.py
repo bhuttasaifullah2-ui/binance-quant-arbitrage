@@ -24,6 +24,7 @@ class ValidationStore:
             CREATE TABLE IF NOT EXISTS opportunity_state(symbol TEXT PRIMARY KEY,state_json TEXT NOT NULL,updated_at_ms INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS opportunity_snapshots(id INTEGER PRIMARY KEY,symbol TEXT NOT NULL,observed_at_ms INTEGER NOT NULL,rank INTEGER,payload TEXT NOT NULL,UNIQUE(symbol,observed_at_ms));
             CREATE INDEX IF NOT EXISTS ix_opportunity_snapshots_time ON opportunity_snapshots(observed_at_ms);
+            CREATE TABLE IF NOT EXISTS observation_scans(id INTEGER PRIMARY KEY,started_at_ms INTEGER NOT NULL,completed_at_ms INTEGER NOT NULL,matched_count INTEGER NOT NULL,eligible_count INTEGER NOT NULL,rejected_count INTEGER NOT NULL,expected_interval_ms INTEGER NOT NULL);
             """)
     def _connect(self) -> sqlite3.Connection:
         db=sqlite3.connect(self.path, timeout=20)
@@ -127,6 +128,12 @@ class ValidationStore:
                         (symbol,observed_at_ms,ranked[0],json.dumps(row,default=str)))
         return emitted
 
+    def record_scan(self, started_at_ms: int, completed_at_ms: int, matched_count: int,
+                    eligible_count: int, rejected_count: int, expected_interval_ms: int) -> None:
+        with self._connect() as db:
+            db.execute("INSERT INTO observation_scans(started_at_ms,completed_at_ms,matched_count,eligible_count,rejected_count,expected_interval_ms) VALUES(?,?,?,?,?,?)",
+                (started_at_ms,completed_at_ms,matched_count,eligible_count,rejected_count,expected_interval_ms))
+
     def statistical_report(self, start_ms: int | None = None, end_ms: int | None = None) -> dict[str, Any]:
         import time
         event_where = []
@@ -149,6 +156,16 @@ class ValidationStore:
             events = db.execute("SELECT * FROM observation_events" + ew + " ORDER BY event_at_ms,id", event_params).fetchall()
             snapshots = db.execute("SELECT * FROM opportunity_snapshots" + sw + " ORDER BY observed_at_ms", snap_params).fetchall()
             all_events = db.execute("SELECT * FROM observation_events ORDER BY event_at_ms,id").fetchall()
+            scan_clauses = []
+            scan_params: list[Any] = []
+            if start_ms is not None:
+                scan_clauses.append("completed_at_ms>=?")
+                scan_params.append(start_ms)
+            if end_ms is not None:
+                scan_clauses.append("completed_at_ms<?")
+                scan_params.append(end_ms)
+            scan_where = (" WHERE " + " AND ".join(scan_clauses)) if scan_clauses else ""
+            scans = db.execute("SELECT * FROM observation_scans" + scan_where + " ORDER BY completed_at_ms", scan_params).fetchall()
         counts: dict[str, int] = {}
         for item in events:
             counts[item["event_type"]] = counts.get(item["event_type"], 0) + 1
@@ -184,7 +201,9 @@ class ValidationStore:
             if item["event_type"] == "OPPORTUNITY_APPEARED":
                 opened[symbol] = int(item["event_at_ms"])
             elif item["event_type"] == "OPPORTUNITY_DISAPPEARED" and symbol in opened:
-                durations.append(max(0, int(item["event_at_ms"]) - opened.pop(symbol)))
+                duration = max(0, int(item["event_at_ms"]) - opened.pop(symbol))
+                if (start_ms is None or int(item["event_at_ms"]) >= start_ms) and (end_ms is None or int(item["event_at_ms"]) < end_ms):
+                    durations.append(duration)
 
         now = int(time.time() * 1000)
         uptime: dict[str, Any] = {}
@@ -221,11 +240,23 @@ class ValidationStore:
                 "evidence": "persisted connection transitions; no uptime inferred before first event",
             }
 
+        scan_gaps = []
+        for previous, current in zip(scans, scans[1:]):
+            delta = int(current["completed_at_ms"]) - int(previous["completed_at_ms"])
+            if delta > int(previous["expected_interval_ms"]) * 2:
+                scan_gaps.append({"from_ms": int(previous["completed_at_ms"]),
+                                  "to_ms": int(current["completed_at_ms"]),
+                                  "gap_ms": delta,
+                                  "expected_interval_ms": int(previous["expected_interval_ms"])})
         return {
             "period_start_ms": start_ms,
             "period_end_ms": end_ms,
             "generated_at_ms": now,
             "observation_duration_ms": None if not events else max(0, int(events[-1]["event_at_ms"]) - int(events[0]["event_at_ms"])),
+            "scan_count": len(scans),
+            "matched_pair_count_total": sum(int(x["matched_count"]) for x in scans),
+            "eligible_scan_count_total": sum(int(x["eligible_count"]) for x in scans),
+            "rejected_scan_count_total": sum(int(x["rejected_count"]) for x in scans),
             "event_count": len(events),
             "snapshot_count": len(snapshots),
             "event_counts": counts,
@@ -241,9 +272,13 @@ class ValidationStore:
             "futures_depth_distribution": distribution("futures_depth_usdt"),
             "data_freshness_age_ms_distribution": distribution("max_field_age_ms"),
             "rejection_reason_counts": rejection_counts,
+            "stale_rejection_count": sum(v for k, v in rejection_counts.items() if "STALE" in k),
+            "invalid_rejection_count": sum(v for k, v in rejection_counts.items() if "INVALID" in k),
             "websocket_uptime": uptime,
             "average_recovery_duration_ms": None if not recovery_durations else sum(recovery_durations) / len(recovery_durations),
             "maximum_recovery_duration_ms": max(recovery_durations) if recovery_durations else None,
+            "data_gaps": {"scanner_intervals": scan_gaps, "count": len(scan_gaps),
+                          "funding_gaps_are_reported_by_funding_reconciliation": True},
             "observed_data_only": True,
             "actual_trading_performance": "NONE — public read-only; no orders placed",
         }
@@ -253,4 +288,6 @@ class ValidationStore:
         with self._connect() as db:
             a=db.execute("DELETE FROM validation_samples WHERE checked_at_ms < ?",(cutoff,)).rowcount
             db.execute("DELETE FROM observation_events WHERE event_at_ms < ?",(cutoff,))
+            db.execute("DELETE FROM opportunity_snapshots WHERE observed_at_ms < ?",(cutoff,))
+            db.execute("DELETE FROM observation_scans WHERE completed_at_ms < ?",(cutoff,))
         return a
