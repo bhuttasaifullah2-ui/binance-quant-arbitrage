@@ -28,7 +28,7 @@ def test_dashboard_asset_uses_existing_read_only_api_endpoints():
     assert 'method:"GET"' in content
     assert "/api/v1/scanner/opportunities" in content
     assert "/api/v1/scanner/eligibility" in content
-    assert "/api/v1/validation/data-quality" in content
+    assert "/api/v1/market/data-quality" in content
     assert "/api/v1/observation/sessions/" in content
     assert "LIVE_TRADING_ENABLED" not in content
     assert 'method:"POST"' not in content
