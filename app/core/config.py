@@ -21,6 +21,11 @@ class Settings(BaseSettings):
     futures_taker_fee_rate: str = "0.0005"
     max_depth_symbols_per_cycle: int = 30
     max_history_symbols_per_cycle: int = 30
+    funding_history_max_pages: int = 5
+    max_hedge_mismatch: str = "0.005"
+    max_clock_skew_ms: int = 5000
+    websocket_streams_per_connection: int = 400
+    observation_mode: bool = False
     orderbook_limit: int = 20
     depth_levels: int = 20
     history_limit: int = 100
