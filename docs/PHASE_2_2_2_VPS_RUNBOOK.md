@@ -57,7 +57,7 @@ Create a system account with no interactive login. These commands are safe to re
 if ! id quantbot >/dev/null 2>&1; then
   sudo useradd --system --create-home --home-dir /var/lib/quantbot --shell /usr/sbin/nologin quantbot
 fi
-sudo install -d -o root -g root -m 0755 /opt/binance-quant-arbitrage
+sudo install -d -o root -g root -m 0755 /opt
 sudo install -d -o quantbot -g quantbot -m 0750 /var/lib/binance-quant-arbitrage
 sudo install -d -o root -g root -m 0755 /opt/releases
 ```
@@ -85,6 +85,10 @@ if [ -e "$APP_DIR" ]; then
     exit 1
   fi
   echo "Continue only after confirming this is the intended checkout and preserving any required data."
+  if [ -n "$(sudo git -C "$APP_DIR" status --porcelain)" ]; then
+    echo "ERROR: checkout has tracked or untracked changes; stop without fetching or switching revisions." >&2
+    exit 1
+  fi
 else
   sudo git clone --no-checkout https://github.com/bhuttasaifullah2-ui/binance-quant-arbitrage.git "$APP_DIR"
 fi
