@@ -1,7 +1,7 @@
 # Phase 2.2 — Linux VPS deployment (read-only)
 
 ## Requirements
-- Python 3.12 or 3.13 (CI matrix covers both).
+- Python 3.12 or 3.13.
 - Linux VPS with outbound HTTPS/WSS access to Binance public market-data hosts.
 - Start with 2 vCPU / 2 GB RAM and monitor actual memory, SQLite growth and network usage; this is a conservative starting point, not a benchmark or guarantee.
 - One application process only: SQLite WAL is not a multi-process write-coordination design.
@@ -38,6 +38,15 @@ Create /etc/binance-quant-arbitrage.env readable only by the service user:
 
 All Binance requests are public and unauthenticated. Do not add API keys. Keep the three opt-in settings false unless intentionally starting observation. LIVE_TRADING_ENABLED is not a supported execution control and must remain false if present in legacy configuration.
 
+## Session lifecycle and restart behavior
+- Each application process creates a new UUID session in the same SQLite database; sessions are never resumed or merged.
+- A clean service shutdown marks the active session COMPLETED and records its end timestamp.
+- If a process disappears without clean shutdown, the next startup marks its still-RUNNING session INTERRUPTED and records which new session detected the interruption. The exact crash instant is not knowable.
+- List sessions at GET /api/v1/observation/sessions. Select the returned session_id to inspect or export it.
+- Export a session JSON document with GET /api/v1/observation/sessions/{session_id}/report.json.
+- REST, WebSocket, clock, data-quality, scanner-eligibility and funding summaries are available under the same session path.
+- Existing legacy daily/cumulative reports are cross-session and must not be substituted for a session-specific report.
+
 ## systemd
 Create /etc/systemd/system/binance-quant-arbitrage.service:
     [Unit]
@@ -69,12 +78,20 @@ Then run systemctl daemon-reload and systemctl enable --now binance-quant-arbitr
 
 Bind to loopback. Do not expose port 8000 directly to the internet; place it behind authenticated VPN/reverse proxy access and TLS if remote access is required. No authentication middleware is included in this phase.
 
+## Smoke test and evidence capture
+1. Confirm the deployed commit SHA and record the three opt-in flags.
+2. Start service and inspect /api/v1/health, /api/v1/validation/summary and /api/v1/observation/sessions.
+3. Record the newly created session_id. Run a 30–60 minute smoke test.
+4. Export its JSON report and preserve the raw file with the deployment commit/configuration.
+5. Restart the service. Confirm the prior session is INTERRUPTED if shutdown was unclean, or COMPLETED if shutdown was graceful; confirm the new process has a different session_id.
+6. If the smoke test is healthy, run an extended observation in a separate session.
+7. Document DNS/network interruptions, REST failures, WebSocket disconnect/recovery events, clock warnings, stale/missing fields, unresolved funding gaps and scanner rejections.
+
 ## Health, logs and shutdown
 - curl http://127.0.0.1:8000/api/v1/health
 - curl http://127.0.0.1:8000/api/v1/validation/summary
 - journalctl -u binance-quant-arbitrage -f
 - systemctl stop binance-quant-arbitrage requests graceful shutdown.
-- Configure journald retention or host logrotate; application logs go to stdout/stderr.
 
 ## Backup and upgrade
 Stop the service before copying SQLite database and WAL/SHM companions, or use SQLite online backup API. Keep encrypted off-host backups and test restore. For upgrades: stop service, back up database, deploy reviewed commit, install dependencies, run python -m compileall -q app tests and pytest -q, start service, check health and validation endpoints, and retain previous release for rollback.
