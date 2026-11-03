@@ -18,6 +18,8 @@ async def test_dashboard_route_serves_self_contained_read_only_html():
     assert "QUANT RESEARCH" in response.text
     assert "Estimated net USDT" in response.text
     assert "No execution UI" in response.text
+    assert "No fresh eligible opportunities" in response.text
+    assert "No observation sessions persisted" in response.text
     assert "setInterval(load,REFRESH)" in response.text
 
 
@@ -29,6 +31,8 @@ def test_dashboard_asset_uses_existing_read_only_api_endpoints():
     assert "/api/v1/scanner/opportunities" in content
     assert "/api/v1/scanner/eligibility" in content
     assert "/api/v1/market/data-quality" in content
+    assert "/api/v1/validation/summary" not in content
+    assert "/api/v1/validation/data-quality" not in content
     assert "/api/v1/observation/sessions/" in content
     assert "LIVE_TRADING_ENABLED" not in content
     assert 'method:"POST"' not in content
