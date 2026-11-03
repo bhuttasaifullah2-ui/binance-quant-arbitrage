@@ -27,6 +27,17 @@ class Settings(BaseSettings):
     max_concurrent_requests: int = 8
     min_net_edge_usdt: str = "0"
     basis_risk_haircut: str = "0.25"
+    score_weight_net_edge: str = "0.25"
+    score_weight_funding_consistency: str = "0.15"
+    score_weight_liquidity: str = "0.15"
+    score_weight_spread: str = "0.10"
+    score_weight_slippage: str = "0.10"
+    score_weight_basis: str = "0.10"
+    score_weight_freshness: str = "0.10"
+    score_weight_funding_volatility: str = "0.05"
+    ranking_max_spread_bps: str = "10"
+    ranking_max_slippage_bps: str = "30"
+    ranking_max_basis_bps: str = "100"
     database_path: str = "data/market_data.sqlite3"
     retention_days: int = 90
     websocket_enabled: bool = False
