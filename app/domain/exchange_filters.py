@@ -25,6 +25,7 @@ class SymbolFilters:
     min_notional: Decimal
     max_notional: Decimal
     apply_min_notional_to_market: bool
+    apply_max_notional_to_market: bool
     contract_size: Decimal = Decimal("1")
 
     @classmethod
@@ -58,6 +59,7 @@ class SymbolFilters:
             min_notional=Decimal(str(min_notional)),
             max_notional=Decimal(str(max_notional)),
             apply_min_notional_to_market=bool(apply_min),
+            apply_max_notional_to_market=bool(notional.get("applyMaxToMarket", True)),
             contract_size=Decimal(str(symbol_info.get("contractSize", "1"))),
         )
 
@@ -102,7 +104,7 @@ class SymbolFilters:
         notional = quantity * price * self.contract_size
         if self.min_notional > ZERO and (not market_order or self.apply_min_notional_to_market) and notional < self.min_notional:
             reasons.append("notional below minimum notional")
-        if self.max_notional > ZERO and notional > self.max_notional:
+        if self.max_notional > ZERO and (not market_order or self.apply_max_notional_to_market) and notional > self.max_notional:
             reasons.append("notional above maximum notional")
         return tuple(reasons)
 
