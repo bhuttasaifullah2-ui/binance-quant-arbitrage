@@ -3,7 +3,7 @@ import pytest
 from app.api.main import app
 
 class FakeStore:
-    def latest(self, limit=100):
+    def latest(self, limit=100, offset=0):
         return [{'symbol':'BTCUSDT'}]
     def funding_history(self, symbol, limit=100):
         return [{'symbol':symbol,'funding_rate':'0.0001'}]
