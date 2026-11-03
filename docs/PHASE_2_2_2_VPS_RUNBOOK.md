@@ -254,7 +254,7 @@ If using the provider firewall instead, inspect its inbound rules in the provide
 Expected listener address: `127.0.0.1:8000`. A listener on `0.0.0.0:8000`, `[::]:8000` or a public IP is a stop condition. Do not create a public reverse-proxy route to this API. For remote operator access, use an SSH tunnel from the operator workstation:
 
 ```bash
-ssh -L 8000:127.0.0.1:8000 <operator-user>@<vps-host>
+ssh -L 8000:127.0.0.1:8000 operator-user@vps-host
 ```
 
 Then access `http://127.0.0.1:8000` on the operator workstation while the tunnel is active.
@@ -363,11 +363,11 @@ sudo -u quantbot /opt/binance-quant-arbitrage/.venv/bin/python -c \
   "/var/lib/binance-quant-arbitrage/session-$SESSION_ID.json"
 ```
 
-Transfer evidence securely using SCP over SSH, not public web hosting or an unauthenticated endpoint. Run these commands on the operator workstation:
+Transfer evidence securely using SCP over SSH, not public web hosting or an unauthenticated endpoint. Run these commands on the operator workstation; replace `operator-user`, `vps-host` and `SESSION_UUID` with the actual SSH username, VPS hostname and session UUID:
 
 ```bash
 mkdir -p ./evidence
-scp <operator-user>@<vps-host>:/var/lib/binance-quant-arbitrage/session-<session-uuid>.json ./evidence/
+scp operator-user@vps-host:/var/lib/binance-quant-arbitrage/session-SESSION_UUID.json ./evidence/
 ```
 
 Before sharing logs or reports, inspect them for hostnames, public IPs, usernames, filesystem paths or other operational details. Do not share environment files, SSH keys, credentials or private system logs. Preserve the original JSON unchanged; create a separate redacted copy if needed.
