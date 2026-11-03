@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     max_clock_drift_ms: int = 5000
     max_validation_message_age_ms: int = 15000
     websocket_probe_timeout_seconds: float = 5.0
+    max_reconnect_attempts: int = 10
+    max_recovery_duration_ms: int = 60000
+    max_message_processing_latency_ms: float = 100.0
+    max_stale_symbols: int = 5
     live_trading_enabled: bool = False
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
