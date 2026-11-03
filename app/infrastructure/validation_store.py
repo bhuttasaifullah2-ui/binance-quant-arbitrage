@@ -124,6 +124,118 @@ class ValidationStore:
                         (symbol,observed_at_ms,ranked[0],json.dumps(row,default=str)))
         return emitted
 
+    def statistical_report(self, start_ms: int | None = None, end_ms: int | None = None) -> dict[str, Any]:
+        import time
+        event_where = []
+        event_params: list[Any] = []
+        snap_where = []
+        snap_params: list[Any] = []
+        if start_ms is not None:
+            event_where.append("event_at_ms>=?")
+            event_params.append(start_ms)
+            snap_where.append("observed_at_ms>=?")
+            snap_params.append(start_ms)
+        if end_ms is not None:
+            event_where.append("event_at_ms<?")
+            event_params.append(end_ms)
+            snap_where.append("observed_at_ms<?")
+            snap_params.append(end_ms)
+        ew = (" WHERE " + " AND ".join(event_where)) if event_where else ""
+        sw = (" WHERE " + " AND ".join(snap_where)) if snap_where else ""
+        with self._connect() as db:
+            events = db.execute("SELECT * FROM observation_events" + ew + " ORDER BY event_at_ms,id", event_params).fetchall()
+            snapshots = db.execute("SELECT * FROM opportunity_snapshots" + sw + " ORDER BY observed_at_ms", snap_params).fetchall()
+            all_events = db.execute("SELECT * FROM observation_events ORDER BY event_at_ms,id").fetchall()
+        counts: dict[str, int] = {}
+        for item in events:
+            counts[item["event_type"]] = counts.get(item["event_type"], 0) + 1
+        payloads = [json.loads(item["payload"]) for item in snapshots]
+
+        def distribution(key: str) -> dict[str, Any]:
+            values = []
+            for payload in payloads:
+                value = payload.get(key)
+                if value is not None:
+                    try:
+                        values.append(Decimal(str(value)))
+                    except Exception:
+                        continue
+            return {
+                "count": len(values),
+                "min": str(min(values)) if values else None,
+                "max": str(max(values)) if values else None,
+                "mean": str(sum(values, Decimal("0")) / len(values)) if values else None,
+            }
+
+        opened: dict[str, int] = {}
+        durations = []
+        for item in all_events:
+            symbol = item["symbol"] or ""
+            if item["event_type"] == "OPPORTUNITY_APPEARED":
+                opened[symbol] = int(item["event_at_ms"])
+            elif item["event_type"] == "OPPORTUNITY_DISAPPEARED" and symbol in opened:
+                durations.append(max(0, int(item["event_at_ms"]) - opened.pop(symbol)))
+
+        now = int(time.time() * 1000)
+        uptime: dict[str, Any] = {}
+        recovery_durations = []
+        for market in ("spot", "futures"):
+            transitions = []
+            for item in all_events:
+                payload = json.loads(item["payload"])
+                if payload.get("market") == market and item["event_type"] in {
+                    "WEBSOCKET_CONNECTED", "WEBSOCKET_RECOVERED", "WEBSOCKET_DISCONNECTED"
+                }:
+                    transitions.append((int(item["event_at_ms"]), item["event_type"], payload))
+            start = None
+            up_ms = 0
+            first = transitions[0][0] if transitions else None
+            last = transitions[-1][0] if transitions else None
+            for stamp, event_type, payload in transitions:
+                if event_type in {"WEBSOCKET_CONNECTED", "WEBSOCKET_RECOVERED"}:
+                    if start is None:
+                        start = stamp
+                    if payload.get("recovery_duration_ms") is not None:
+                        recovery_durations.append(int(payload["recovery_duration_ms"]))
+                elif start is not None:
+                    up_ms += max(0, stamp - start)
+                    start = None
+            if start is not None:
+                up_ms += max(0, now - start)
+                last = now
+            uptime[market] = {
+                "measured_connected_ms": up_ms,
+                "measured_window_ms": None if first is None or last is None else max(0, last - first),
+                "uptime_fraction": None if first is None or last is None or last <= first
+                    else str(Decimal(up_ms) / Decimal(last - first)),
+                "evidence": "persisted connection transitions; no uptime inferred before first event",
+            }
+
+        return {
+            "period_start_ms": start_ms,
+            "period_end_ms": end_ms,
+            "generated_at_ms": now,
+            "observation_duration_ms": None if not events else max(0, int(events[-1]["event_at_ms"]) - int(events[0]["event_at_ms"])),
+            "event_count": len(events),
+            "snapshot_count": len(snapshots),
+            "event_counts": counts,
+            "opportunity_appearance_count": counts.get("OPPORTUNITY_APPEARED", 0),
+            "opportunity_disappearance_count": counts.get("OPPORTUNITY_DISAPPEARED", 0),
+            "eligibility_transition_count": counts.get("ELIGIBILITY_CHANGED", 0),
+            "ranking_change_count": counts.get("RANKING_CHANGED", 0),
+            "average_completed_opportunity_duration_ms": None if not durations else sum(durations) // len(durations),
+            "maximum_completed_opportunity_duration_ms": max(durations) if durations else None,
+            "funding_rate_distribution": distribution("funding_rate"),
+            "basis_bps_distribution": distribution("basis_bps"),
+            "spot_depth_distribution": distribution("spot_depth_usdt"),
+            "futures_depth_distribution": distribution("futures_depth_usdt"),
+            "websocket_uptime": uptime,
+            "average_recovery_duration_ms": None if not recovery_durations else sum(recovery_durations) / len(recovery_durations),
+            "maximum_recovery_duration_ms": max(recovery_durations) if recovery_durations else None,
+            "observed_data_only": True,
+            "actual_trading_performance": "NONE — public read-only; no orders placed",
+        }
+
     def prune(self, now_ms: int) -> int:
         cutoff=now_ms-self.retention_days*86400000
         with self._connect() as db:
