@@ -92,9 +92,12 @@ async def lifespan(app: FastAPI):
                         "next_funding_time_ms": pi[symbol].get("nextFundingTime")}, now, now)
             last_recovery_ms = now
 
+    hub.event_sink = lambda market, symbol, stream, event_ms, received_ms, payload: store.save_market_event(
+        market, symbol, stream, event_ms, received_ms, payload)
     websocket_manager = BinanceWebSocketManager(
         hub, settings.binance_spot_ws_url, settings.binance_futures_ws_url,
-        recovery=recover_snapshots, streams_per_connection=settings.websocket_streams_per_connection)
+        recovery=recover_snapshots, streams_per_connection=settings.websocket_streams_per_connection,
+        health_sink=lambda market, health, now_ms: store.save_ws_health(market, health, now_ms))
     scanner = MarketScanner(client, store, settings, hub, websocket_manager)
     app.state.binance_client = client
     app.state.market_store = store
@@ -244,7 +247,8 @@ async def scanner_rejections(request: Request, limit: int = Query(100, ge=1, le=
 @app.get("/api/v1/market/stream-health")
 async def stream_health(request: Request):
     hub: MarketDataHub = request.app.state.market_hub
-    return {"enabled": settings.websocket_enabled, **hub.stream_health()}
+    return {"enabled": settings.websocket_enabled, **hub.stream_health(),
+            "persisted": request.app.state.market_store.websocket_health()}
 
 
 @app.get("/api/v1/market/data-quality")
@@ -274,6 +278,13 @@ async def profitability_history(request: Request, symbol: str, limit: int = Quer
     rows = request.app.state.market_store.profitability_history(symbol, limit)
     return {"symbol": symbol.upper(), "items": rows, "count": len(rows),
             "disclaimer": "Historical estimates are observations, not realized trading PnL."}
+
+
+@app.get("/api/v1/observation/summary")
+async def observation_summary(request: Request):
+    return {**request.app.state.market_store.observation_summary(),
+            "enabled": settings.observation_mode,
+            "disclaimer": "Observations are market estimates only; no orders or realized PnL are simulated."}
 
 
 @app.get("/api/v1/market/orderbook/{symbol}")
