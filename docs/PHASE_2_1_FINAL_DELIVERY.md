@@ -4,10 +4,10 @@
 
 Phase 2.1 has been merged into main. This is an upgraded read-only market intelligence foundation, not a production-certified trading system.
 
-- Pull request: https://github.com/bhuttasaifullah2-ui/binance-quant-arbitrage/pull/3
-- Merge commit: 04f03f16979af923ac420ffa93c70dd3961089b9
+- Primary pull request: https://github.com/bhuttasaifullah2-ui/binance-quant-arbitrage/pull/3 (merged)\n- Follow-up correctness pull request: https://github.com/bhuttasaifullah2-ui/binance-quant-arbitrage/pull/4 (merged)
+- Initial Phase 2.1 merge commit: 04f03f16979af923ac420ffa93c70dd3961089b9\n- Follow-up WebSocket scanner fix merge commit: e93cef7fa48dc904cf346c9cea701bb435d09beb
 - CI-verified head: 75ae592c195ea920e1557ece59995d10e0075675
-- CI: Python 3.12 and 3.13 both passed (35 passed, 1 skipped each).
+- CI: Python 3.12 and 3.13 both passed after the follow-up fix (36 passed, 1 skipped each).
 - Detailed results: docs/PHASE_2_1_TEST_REPORT.md
 
 ## Main features delivered
