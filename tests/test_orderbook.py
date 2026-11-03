@@ -14,3 +14,12 @@ def test_insufficient_depth_is_not_marked_complete():
     result = estimate_vwap([["100", "1"]], D("500"), "sell")
     assert result is not None
     assert not result.complete
+
+
+
+def test_quantity_vwap_executes_exact_exchange_rounded_quantity():
+    from app.domain.orderbook import estimate_vwap_quantity
+    result = estimate_vwap_quantity([["100", "1"], ["101", "2"]], D("1.5"), "buy")
+    assert result is not None and result.complete
+    assert result.executed_quantity == D("1.5")
+    assert result.quote_notional == D("150.5")
