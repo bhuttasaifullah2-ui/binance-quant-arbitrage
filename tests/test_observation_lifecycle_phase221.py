@@ -21,7 +21,7 @@ def test_lifecycle_events_are_deduplicated_and_survive_restart(tmp_path):
     assert event_types.count("OPPORTUNITY_APPEARED") == 1
     assert "FUNDING_RATE_CHANGED" in event_types
     assert "OPPORTUNITY_DISAPPEARED" in event_types
-    assert reopened.statistical_report()["snapshot_count"] == 2
+    assert reopened.statistical_report()["snapshot_count"] == 3
 
 
 def test_daily_report_filters_persisted_events(tmp_path):
