@@ -10,11 +10,17 @@ from app.exchange.binance.public_client import BinanceAPIError
 class LiveValidationService:
     def __init__(self, client: Any, hub: Any, websocket_manager: Any, store: Any,
                  max_clock_drift_ms: int = 5000, max_message_age_ms: int = 15000,
-                 websocket_probe_timeout: float = 5.0) -> None:
+                 websocket_probe_timeout: float = 5.0, max_reconnect_attempts: int = 10,
+                 max_recovery_duration_ms: int = 60000,
+                 max_processing_latency_ms: float = 100.0, max_stale_symbols: int = 5) -> None:
         self.client,self.hub,self.websocket_manager,self.store=client,hub,websocket_manager,store
         self.max_clock_drift_ms=max_clock_drift_ms
         self.max_message_age_ms=max_message_age_ms
         self.websocket_probe_timeout=websocket_probe_timeout
+        self.max_reconnect_attempts=max_reconnect_attempts
+        self.max_recovery_duration_ms=max_recovery_duration_ms
+        self.max_processing_latency_ms=max_processing_latency_ms
+        self.max_stale_symbols=max_stale_symbols
         self.last_clock: dict[str,Any]={}
         self.connectivity: dict[str,Any]={}
         self.funding: dict[str,Any]={}
@@ -98,7 +104,11 @@ class LiveValidationService:
             age=None if last_message is None else max(0,now-int(last_message))
             item["last_message_age_ms"]=age
             item["current_uptime_ms"]=item.get("uptime_ms",0)+(max(0,now-self.websocket_manager._connected_since.get(market,now)) if item.get("connected") else 0)
-            item["status"]="HEALTHY" if item.get("connected") and age is not None and age<=self.max_message_age_ms else "STALE"
+            last_recovery=(item.get("recovery_durations_ms") or [0])[-1]
+            unhealthy=(item.get("consecutive_failures",0)>self.max_reconnect_attempts
+                or last_recovery>self.max_recovery_duration_ms
+                or (item.get("average_processing_latency_ms") or 0)>self.max_processing_latency_ms)
+            item["status"]="UNHEALTHY" if unhealthy else "HEALTHY" if item.get("connected") and age is not None and age<=self.max_message_age_ms else "STALE"
             item["checked_at_ms"]=now
         return {"checked_at_ms":now,"status":"HEALTHY" if all(x.get("status")=="HEALTHY" for x in streams.get("streams",{}).values()) and streams.get("streams") else "WARNING",
                 "streams":streams.get("streams",{}),"live_trading_enabled":False}
@@ -124,9 +134,11 @@ class LiveValidationService:
             symbols[symbol]={"status":status,"missing_fields":missing,"invalid_fields":invalid,
                 "stale_fields":stale,"field_age_ms":ages,"eligible":status=="HEALTHY",
                 "checked_at_ms":now}
-        return {"checked_at_ms":now,"symbols":symbols,"symbol_count":len(symbols),
+        stale_count=sum(1 for x in symbols.values() if x["status"] in {"STALE","MISSING","INVALID"})
+        return {"checked_at_ms":now,"symbols":symbols,"symbol_count":len(symbols),"stale_symbol_count":stale_count,
+            "max_stale_symbols_threshold":self.max_stale_symbols,
             "eligible_symbol_count":sum(1 for x in symbols.values() if x["eligible"]),
-            "status":"HEALTHY" if symbols and all(x["eligible"] for x in symbols.values()) else "WARNING"}
+            "status":"HEALTHY" if symbols and stale_count<=self.max_stale_symbols and all(x["eligible"] for x in symbols.values()) else "WARNING"}
     async def validate_funding(self,symbol: str="BTCUSDT") -> dict[str,Any]:
         current=await self.client.futures_premium_index()
         item=next((x for x in current if x.get("symbol")==symbol.upper()),None)
