@@ -17,6 +17,7 @@ class MarketDataHub:
         self._last_update_ids: dict[str, int] = {}
         self._last_persist_ms: dict[str, int] = {}
         self.event_sink: Callable[[str, str, str, int, int, dict[str, Any]], None] | None = None
+        self.quality_sink: Callable[[dict[str, Any], int], None] | None = None
 
     def set_symbols(self, symbols: set[str]) -> None:
         self.symbols = set(symbols)
@@ -24,6 +25,12 @@ class MarketDataHub:
     def set_clock_offset(self, market: str, offset_ms: int, synced_at_ms: int) -> None:
         self.clock_offsets_ms[market] = offset_ms
         self.clock_sync_at_ms = synced_at_ms
+
+    def _record_quality(self, event: dict[str, Any], now_ms: int) -> None:
+        self.quality_events.append(event)
+        self.quality_events = self.quality_events[-1000:]
+        if self.quality_sink:
+            self.quality_sink(event, now_ms)
 
     def _state(self, symbol: str) -> SymbolMarketState:
         return self.states.setdefault(symbol.upper(), SymbolMarketState(symbol.upper()))
@@ -47,18 +54,18 @@ class MarketDataHub:
             update_key = f"{message.get('_market', 'unknown')}:{symbol}:bookticker"
             previous_id = self._last_update_ids.get(update_key)
             if update_id and previous_id is not None and update_id <= previous_id:
-                self.quality_events.append({"symbol": symbol, "reason": "duplicate_or_out_of_order_update_id"})
+                self._record_quality({"symbol": symbol, "reason": "duplicate_or_out_of_order_update_id"}, now)
                 return False
             if update_id:
                 self._last_update_ids[update_key] = update_id
         if event_ms <= 0:
-            self.quality_events.append({"symbol": symbol, "reason": "missing_event_timestamp"})
+            self._record_quality({"symbol": symbol, "reason": "missing_event_timestamp"}, now)
             return False
         if event_ms > now + self.max_clock_skew_ms:
-            self.quality_events.append({"symbol": symbol, "reason": "future_event_timestamp", "event_time_ms": event_ms})
+            self._record_quality({"symbol": symbol, "reason": "future_event_timestamp", "event_time_ms": event_ms}, now)
             return False
         if now - event_ms > self.max_event_delay_ms:
-            self.quality_events.append({"symbol": symbol, "reason": "delayed_event", "event_time_ms": event_ms})
+            self._record_quality({"symbol": symbol, "reason": "delayed_event", "event_time_ms": event_ms}, now)
             return False
         values: dict[str, Any] = {}
         stream_name = stream.lower()
@@ -85,7 +92,7 @@ class MarketDataHub:
         key = stream_name
         accepted = self._state(symbol).apply(key, event_ms, now, values)
         if not accepted:
-            self.quality_events.append({"symbol": symbol, "reason": "duplicate_or_out_of_order", "stream": key})
+            self._record_quality({"symbol": symbol, "reason": "duplicate_or_out_of_order", "stream": key}, now)
         elif self.event_sink:
             persist_key = f"{market}:{symbol}:{key}"
             if now - self._last_persist_ms.get(persist_key, 0) >= 10000:
