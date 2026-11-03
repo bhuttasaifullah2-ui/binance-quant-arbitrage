@@ -28,8 +28,12 @@ async def funding(request: Request): return _service(request).funding or {"statu
 async def run_funding(request: Request,symbol: str): return await _service(request).validate_funding(symbol)
 @router.get("/api/v1/validation/hedge")
 async def hedge(request: Request): return _service(request).hedge
+@router.post("/api/v1/validation/hedge/{symbol}")
+async def run_hedge(request: Request,symbol: str): return await _service(request).validate_hedge(symbol)
 @router.get("/api/v1/validation/profitability")
 async def profitability(request: Request): return _service(request).profitability
+@router.post("/api/v1/validation/profitability/run")
+async def run_profitability(request: Request,notional: str="1000"): return _service(request).validate_profitability(notional)
 @router.get("/api/v1/observation/events")
 async def observation_events(request: Request,limit: int=Query(200,ge=1,le=2000)):
     return {"items":request.app.state.validation_store.events(limit),"count":len(request.app.state.validation_store.events(limit))}
