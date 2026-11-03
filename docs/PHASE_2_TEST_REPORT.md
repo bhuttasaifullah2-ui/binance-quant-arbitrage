@@ -5,7 +5,7 @@
 - GitHub Actions workflow: Python tests
 - Python: 3.12
 - Run number: 19
-- Pull request: #1
+- Pull request: #2
 - Head commit tested: a5e6d251f61cac41ed499206c41de2bee7b5370f
 - Compile step: passed (python -m compileall -q app tests)
 - Test command: pytest -q
