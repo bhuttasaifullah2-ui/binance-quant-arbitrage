@@ -11,8 +11,10 @@ class LiveValidationService:
                  max_clock_drift_ms: int = 5000, max_message_age_ms: int = 15000,
                  websocket_probe_timeout: float = 5.0, max_reconnect_attempts: int = 10,
                  max_recovery_duration_ms: int = 60000,
-                 max_processing_latency_ms: float = 100.0, max_stale_symbols: int = 5) -> None:
+                 max_processing_latency_ms: float = 100.0, max_stale_symbols: int = 5,
+                 market_store: Any | None = None) -> None:
         self.client,self.hub,self.websocket_manager,self.store=client,hub,websocket_manager,store
+        self.market_store = market_store
         self.max_clock_drift_ms=max_clock_drift_ms
         self.max_message_age_ms=max_message_age_ms
         self.websocket_probe_timeout=websocket_probe_timeout
@@ -138,23 +140,84 @@ class LiveValidationService:
             "max_stale_symbols_threshold":self.max_stale_symbols,
             "eligible_symbol_count":sum(1 for x in symbols.values() if x["eligible"]),
             "status":"HEALTHY" if symbols and stale_count<=self.max_stale_symbols and all(x["eligible"] for x in symbols.values()) else "WARNING"}
-    async def validate_funding(self,symbol: str="BTCUSDT") -> dict[str,Any]:
-        current=await self.client.futures_premium_index()
-        item=next((x for x in current if x.get("symbol")==symbol.upper()),None)
-        history=await self.client.futures_funding_history(symbol.upper(),limit=100)
-        times=[int(x["fundingTime"]) for x in history]
-        unique=sorted(set(times)); gaps=[]
-        if len(unique)>1:
-            gaps=[b-a for a,b in zip(unique,unique[1:]) if b-a>9*3600000]
-        current_rate=None if item is None else str(item.get("lastFundingRate"))
-        self.funding={"symbol":symbol.upper(),"status":"HEALTHY" if item and history and not gaps else "WARNING",
-          "checked_at_ms":int(time.time()*1000),"current_observed_rate":current_rate,
-          "next_funding_time_ms":None if item is None else item.get("nextFundingTime"),
-          "historical_realized_count":len(history),"unique_settlement_count":len(unique),
-          "duplicate_interval_count":len(times)-len(unique),"possible_gap_count":len(gaps),
-          "gap_durations_ms":gaps,"estimated_next_rate":"NOT_PREDICTED",
-          "actual_future_funding":"UNKNOWN_UNTIL_REALIZED"}
-        self.store.record("funding",symbol.upper(),self.funding["checked_at_ms"],self.funding["status"],self.funding)
+    async def validate_funding(self, symbol: str = "BTCUSDT") -> dict[str, Any]:
+        from app.domain.funding import detect_funding_interval_hours, funding_history_gaps
+        from app.exchange.binance.funding_history import fetch_funding_history
+
+        symbol = symbol.upper()
+        now = int(time.time() * 1000)
+        current = await self.client.futures_premium_index()
+        item = next((x for x in current if x.get("symbol") == symbol), None)
+        rows = await fetch_funding_history(self.client, symbol, page_size=1000, max_pages=10)
+        timestamp_errors = []
+        by_time: dict[int, dict[str, Any]] = {}
+        for row in rows:
+            try:
+                stamp = int(row["fundingTime"])
+                rate = Decimal(str(row["fundingRate"]))
+                if stamp <= 0 or stamp > now + self.max_clock_drift_ms or not rate.is_finite():
+                    timestamp_errors.append({"funding_time_ms": stamp, "reason": "invalid timestamp or rate"})
+                    continue
+                by_time[stamp] = row
+            except (KeyError, ValueError, TypeError, InvalidOperation):
+                timestamp_errors.append({"row": row, "reason": "malformed funding record"})
+        ordered = [by_time[key] for key in sorted(by_time)]
+        from app.domain.models import FundingObservation
+        observations = [FundingObservation(symbol, Decimal(str(x["fundingRate"])), int(x["fundingTime"]))
+                        for x in ordered]
+        interval = detect_funding_interval_hours([x.funding_time_ms for x in observations])
+        gaps = funding_history_gaps(observations, interval) if len(observations) > 1 else []
+
+        # Bounded incremental backfill: each known gap is queried separately; unresolved
+        # gaps remain explicit and are never synthesized as zero-valued settlements.
+        for gap_start, gap_end in gaps[:10]:
+            missing_start = gap_start + interval * 3600000
+            missing_end = gap_end - 1
+            if missing_start <= missing_end:
+                backfill = await fetch_funding_history(
+                    self.client, symbol, start_time_ms=missing_start,
+                    end_time_ms=missing_end, page_size=1000, max_pages=5)
+                for row in backfill:
+                    try:
+                        stamp = int(row["fundingTime"])
+                        rate = Decimal(str(row["fundingRate"]))
+                        if stamp > 0 and stamp <= now + self.max_clock_drift_ms and rate.is_finite():
+                            by_time[stamp] = row
+                    except (KeyError, ValueError, TypeError, InvalidOperation):
+                        timestamp_errors.append({"row": row, "reason": "malformed backfill record"})
+        ordered = [by_time[key] for key in sorted(by_time)]
+        observations = [FundingObservation(symbol, Decimal(str(x["fundingRate"])), int(x["fundingTime"]))
+                        for x in ordered]
+        unresolved = funding_history_gaps(observations, interval) if len(observations) > 1 else []
+        if self.market_store is not None:
+            self.market_store.save_funding_observations(symbol, ordered, now)
+
+        current_rate = None if item is None else item.get("lastFundingRate")
+        latest_realized = None if not ordered else ordered[-1].get("fundingRate")
+        mismatch = False
+        if current_rate is not None and latest_realized is not None:
+            mismatch = abs(Decimal(str(current_rate)) - Decimal(str(latest_realized))) > Decimal("0.00000001")
+        next_time = None if item is None else item.get("nextFundingTime")
+        next_time_valid = next_time is not None and int(next_time) > now
+        status = "HEALTHY" if item and ordered and not unresolved and not timestamp_errors and not mismatch and next_time_valid else "WARNING"
+        self.funding = {
+            "symbol": symbol, "status": status, "checked_at_ms": now,
+            "current_observed_rate": None if current_rate is None else str(current_rate),
+            "latest_historical_realized_rate": None if latest_realized is None else str(latest_realized),
+            "current_vs_latest_historical_match": None if current_rate is None or latest_realized is None else not mismatch,
+            "next_funding_time_ms": next_time,
+            "historical_realized_count": len(ordered),
+            "duplicate_interval_count": len(rows) - len({int(x["fundingTime"]) for x in rows if x.get("fundingTime") is not None}),
+            "funding_interval_hours_estimate": interval,
+            "resolved_gap_count": len(gaps) - len(unresolved),
+            "unresolved_gaps": [{"previous_settlement_ms": a, "next_settlement_ms": b} for a, b in unresolved],
+            "timestamp_errors": timestamp_errors,
+            "pagination_max_pages": 10,
+            "estimated_next_rate": "NOT_PREDICTED",
+            "actual_future_funding": "UNKNOWN_UNTIL_REALIZED",
+            "missing_intervals_are_not_zero": True,
+        }
+        self.store.record("funding_reconciliation", symbol, now, status, self.funding)
         return self.funding
 
     async def validate_hedge(self, symbol: str = "BTCUSDT") -> dict[str,Any]:
