@@ -1,5 +1,5 @@
 from decimal import Decimal
-from .decimal_utils import quantize_step
+from app.core.decimal_utils import quantize_step
 
 def matched_quantities(notional: Decimal, spot_price: Decimal, futures_price: Decimal,
                        spot_step: Decimal, futures_step: Decimal) -> tuple[Decimal, Decimal]:
