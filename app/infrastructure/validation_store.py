@@ -218,6 +218,9 @@ class ValidationStore:
                     transitions.append((int(item["event_at_ms"]), item["event_type"], payload))
             period_start = start_ms if start_ms is not None else (transitions[0][0] if transitions else None)
             period_end = min(end_ms, now) if end_ms is not None else now
+            period_transitions = [x for x in transitions if (period_start is None or x[0] >= period_start) and x[0] <= period_end]
+            if period_transitions and period_transitions[-1][1] == "WEBSOCKET_DISCONNECTED":
+                period_end = period_transitions[-1][0]
             connected = False
             known = False
             segment_start = None
@@ -266,7 +269,7 @@ class ValidationStore:
             "period_start_ms": start_ms,
             "period_end_ms": end_ms,
             "generated_at_ms": now,
-            "observation_duration_ms": None if not events else max(0, int(events[-1]["event_at_ms"]) - int(events[0]["event_at_ms"])),
+            "observation_duration_ms": None if len(scans) < 2 else max(0, int(scans[-1]["completed_at_ms"]) - int(scans[0]["started_at_ms"])),
             "scan_count": len(scans),
             "matched_pair_count_total": sum(int(x["matched_count"]) for x in scans),
             "eligible_opportunity_count_total": sum(int(x["eligible_count"]) for x in scans),
