@@ -15,6 +15,9 @@ from app.infrastructure.sqlite_store import SQLiteMarketStore
 from app.services.market_data_hub import MarketDataHub
 from app.services.market_scanner import MarketScanner
 from app.services.websocket_manager import BinanceWebSocketManager
+from app.services.live_validation import LiveValidationService
+from app.infrastructure.validation_store import ValidationStore
+from app.api.validation import router as validation_router
 
 logger = logging.getLogger(__name__)
 
@@ -104,17 +107,37 @@ async def lifespan(app: FastAPI):
         recovery=recover_snapshots, streams_per_connection=settings.websocket_streams_per_connection,
         health_sink=lambda market, health, now_ms: store.save_ws_health(market, health, now_ms))
     scanner = MarketScanner(client, store, settings, hub, websocket_manager)
+    validation_store = ValidationStore(settings.database_path, settings.retention_days)
+    validator = LiveValidationService(client, hub, websocket_manager, validation_store,
+        settings.max_clock_drift_ms, settings.max_validation_message_age_ms,
+        settings.websocket_probe_timeout_seconds)
     app.state.binance_client = client
     app.state.market_store = store
     app.state.market_scanner = scanner
     app.state.market_hub = hub
     app.state.websocket_manager = websocket_manager
+    app.state.validation_store = validation_store
+    app.state.live_validator = validator
     scanner_task = asyncio.create_task(scanner.run_forever(), name="market-scanner")
     ws_task = asyncio.create_task(websocket_manager.run(), name="binance-public-websockets") if settings.websocket_enabled else None
+    async def validation_loop() -> None:
+        while True:
+            try:
+                await validator.validate()
+            except Exception:
+                logger.exception("Periodic public validation failed")
+            await asyncio.sleep(max(30, settings.validation_interval_seconds))
+    validation_task = asyncio.create_task(validation_loop(), name="binance-read-only-validation") if settings.live_validation_enabled else None
     try:
         yield
     finally:
         scanner.stop()
+        if validation_task:
+            validation_task.cancel()
+            try:
+                await validation_task
+            except asyncio.CancelledError:
+                pass
         scanner_task.cancel()
         if ws_task:
             await websocket_manager.close()
@@ -131,8 +154,9 @@ async def lifespan(app: FastAPI):
         await client.close()
 
 
-app = FastAPI(title="Binance Quant Arbitrage", version="0.3.0",
+app = FastAPI(title="Binance Quant Arbitrage", version="0.4.0",
               description="Read-only Binance Spot and USD-M funding intelligence API.", lifespan=lifespan)
+app.include_router(validation_router)
 
 
 def _scanner(request: Request) -> MarketScanner:
