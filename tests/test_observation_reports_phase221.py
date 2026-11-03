@@ -9,5 +9,5 @@ def test_report_uses_persisted_scan_windows_and_detects_large_scan_gaps(tmp_path
     report = store.statistical_report()
     assert report["scan_count"] == 3
     assert report["observation_duration_ms"] == 4100
-    assert report["data_gaps"]["count"] == 1
+    assert report["data_gaps"]["scanner_gap_count"] == 1
     assert report["eligible_opportunity_count_total"] == 6
