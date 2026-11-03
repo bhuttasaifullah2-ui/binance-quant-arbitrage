@@ -8,6 +8,6 @@
 - Net estimate models one funding interval, simple entry/exit taker fees and simplified slippage. It does not yet fully model basis convergence, basis drift scenarios, margin, liquidation, capital opportunity cost, taxes or execution risk.
 - Funding interval is inferred from the returned settlement timestamps; default fallback is eight hours when insufficient data exists.
 - SQLite is a single-process local store; no migrations framework or multi-process write coordination is included.
-- /market/spot, /market/futures and /funding/current currently expose the latest persisted candidate snapshots, not a full raw all-symbol market dump.
+- /api/v1/market/spot, /api/v1/market/futures and /api/v1/funding/current now fetch live bulk public REST snapshots and paginate the eligible USDT symbols. The historical SQLite endpoints retain only symbols that passed the scanner's detailed enrichment stage.
 - The scanner does not place orders and does not connect to authenticated Binance account APIs.
 - Automated test suite passed in GitHub Actions: 16 tests passed. See docs/PHASE_2_TEST_REPORT.md for the exact run.
