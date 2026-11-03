@@ -34,5 +34,6 @@ def test_dashboard_asset_uses_existing_read_only_api_endpoints():
     assert "/api/v1/validation/summary" not in content
     assert "/api/v1/validation/data-quality" not in content
     assert "/api/v1/observation/sessions/" in content
-    assert "LIVE_TRADING_ENABLED" not in content
+    assert "LIVE_TRADING_ENABLED" in content
+    assert "execution_enabled" in content
     assert 'method:"POST"' not in content
