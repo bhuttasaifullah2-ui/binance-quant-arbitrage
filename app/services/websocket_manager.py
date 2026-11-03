@@ -30,6 +30,7 @@ class BinanceWebSocketManager:
         spot = [f"{s}@bookTicker" for s in sorted(self.hub.symbols)]
         spot += [f"{s}@ticker" for s in sorted(self.hub.symbols)]
         futures = [f"{s}@bookTicker" for s in sorted(self.hub.symbols)]
+        futures += [f"{s}@ticker" for s in sorted(self.hub.symbols)]
         futures += [f"{s}@markPrice@1s" for s in sorted(self.hub.symbols)]
         output: list[tuple[str, list[str]]] = []
         for market, url, streams in (("spot", self.spot_url, spot), ("futures", self.futures_url, futures)):
@@ -53,7 +54,10 @@ class BinanceWebSocketManager:
                             break
                         try:
                             import json
-                            accepted = self.hub.apply_message(json.loads(raw))
+                            message = json.loads(raw)
+                            if isinstance(message, dict):
+                                message["_market"] = market
+                            accepted = self.hub.apply_message(message)
                             if accepted:
                                 self.hub.health[market]["last_event_ms"] = int(asyncio.get_running_loop().time()*1000)
                         except (ValueError, TypeError):
