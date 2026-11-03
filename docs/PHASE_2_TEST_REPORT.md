@@ -4,12 +4,12 @@
 
 - GitHub Actions workflow: Python tests
 - Python: 3.12
-- Run number: 11
+- Run number: 19
 - Pull request: #1
-- Head commit tested: 0b8ddb0aec3bbfc7e7a6d36f0e9a2b7d80d4ddb2
+- Head commit tested: a5e6d251f61cac41ed499206c41de2bee7b5370f
 - Compile step: passed (python -m compileall -q app tests)
 - Test command: pytest -q
-- Result: **16 passed in 0.47s**
+- Result: **16 passed in 0.48s**
 
 The first CI attempt exposed a Phase 1 import-path defect in app/domain/hedge.py and the follow-up attempt exposed a test-double mismatch after pagination was added. Both were corrected; the successful run above includes those corrections.
 
