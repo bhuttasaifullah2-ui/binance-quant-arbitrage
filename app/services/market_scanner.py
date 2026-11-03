@@ -146,10 +146,12 @@ class MarketScanner:
                                 all(s in self.market_hub.states and
                                     "spot_bid" in self.market_hub.states[s].fields and
                                     "futures_mark" in self.market_hub.states[s].fields for s in common))
+                rest_snapshot_ms: int | None = None
                 if ws_ready:
                     spot_t, spot_b, fut_t, fut_b, prem = self._hub_maps(common, int(time.time()*1000))
                 else:
                     rest_started = int(time.time() * 1000)
+                    rest_snapshot_ms = rest_started
                     spot_tickers, spot_books, fut_tickers, fut_books, premium = await asyncio.gather(
                         self.client.spot_ticker_24h(), self.client.spot_book_ticker(),
                         self.client.futures_ticker_24h(), self.client.futures_book_ticker(),
@@ -195,7 +197,7 @@ class MarketScanner:
                                 page_size=min(self.config.history_limit, 1000),
                                 max_pages=self.config.funding_history_max_pages)]
                         else:
-                            history_tasks = [asyncio.sleep(0, result=self.store.funding_history(symbol, self.config.history_limit))]
+                            history_tasks = [asyncio.sleep(0, result=[])]
                         return await asyncio.gather(*depth_tasks, *history_tasks)
 
                 history_symbols = {x[0] for x in detailed[:self.config.max_history_symbols_per_cycle]}
@@ -206,7 +208,8 @@ class MarketScanner:
                     symbol, funding, st, sb, ft, fb, pi, sv, fv, ss, fs = item
                     if isinstance(result, BaseException):
                         self._reject(symbol, f"detailed market request failed:{type(result).__name__}", now); continue
-                    sd, fd, oi, hist = result
+                    sd, fd, oi, new_history = result
+                    hist = list(new_history) + self.store.funding_history(symbol, self.config.history_limit)
                     try:
                         if not sd.get("bids") or not sd.get("asks") or not fd.get("bids") or not fd.get("asks"):
                             self._reject(symbol, "missing order-book side", now); continue
@@ -233,11 +236,17 @@ class MarketScanner:
                         costs = CostModel(_d(self.config.spot_taker_fee_rate), _d(self.config.futures_taker_fee_rate),
                                           _d(self.config.spot_taker_fee_rate), _d(self.config.futures_taker_fee_rate),
                                           slip_rate/4, slip_rate/4)
-                        profit = estimate_net_funding(min(hedge["spot_notional"], hedge["futures_notional"]), funding, costs)
+                        matched_notional = min(hedge["spot_notional"], hedge["futures_notional"])
+                        gross_funding = matched_notional * funding
+                        entry_fees = (hedge["spot_notional"] * _d(self.config.spot_taker_fee_rate)
+                                      + hedge["futures_notional"] * _d(self.config.futures_taker_fee_rate))
+                        exit_fees = entry_fees
+                        slippage_cost = sum((x.quote_notional * x.slippage_bps / Decimal("10000")
+                                             for x in executions if x is not None), Decimal("0"))
                         funding_obs = [FundingObservation(symbol, _d(x["fundingRate"]), int(x["fundingTime"]))
                                        for x in hist if "fundingRate" in x and "fundingTime" in x]
-                        if hist and "fundingTime" in hist[0]:
-                            self.store.save_funding_observations(symbol, hist, now)
+                        if new_history:
+                            self.store.save_funding_observations(symbol, new_history, now)
                         stats = summarize_funding(funding_obs)
                         if stats["count"] == 0:
                             funding_obs = [FundingObservation(symbol, _d(x["funding_rate"]), int(x["funding_time_ms"]))
@@ -246,7 +255,7 @@ class MarketScanner:
                         funding_interval = detect_funding_interval_hours([x.funding_time_ms for x in funding_obs])
                         bps = basis_bps(spot_ask, mark)
                         basis_penalty = abs(bps)/Decimal("10000")*notional*_d(self.config.basis_risk_haircut)
-                        net = profit.expected_net - basis_penalty
+                        net = gross_funding - entry_fees - exit_fees - slippage_cost - basis_penalty
                         age_ms = 0
                         if self.config.websocket_enabled and self.market_hub:
                             state = self.market_hub.states.get(symbol)
@@ -258,7 +267,7 @@ class MarketScanner:
                                 self._reject(symbol, ";".join(quality["reasons"]), now); continue
                             age_ms = max((x for x in quality["ages_ms"].values() if x is not None), default=0)
                         else:
-                            age_ms = max(0, now - self._metadata_at_ms)
+                            age_ms = max(0, now - (rest_snapshot_ms or now))
                             if age_ms > self.config.max_data_age_seconds*1000:
                                 self._reject(symbol, "REST snapshot stale", now); continue
                         weights = RankingWeights(
@@ -294,7 +303,7 @@ class MarketScanner:
                                "futures_slippage_bps": fut_sell.slippage_bps + fut_buy.slippage_bps,
                                "basis_bps": bps, "observed_at_ms": now, "source": "binance_ws" if ws_ready else "binance_rest"}
                         self.store.save_observation(row)
-                        break_even = (profit.entry_fees + profit.exit_fees + profit.slippage + basis_penalty) / notional
+                        break_even = (entry_fees + exit_fees + slippage_cost + basis_penalty) / notional
                         out.append({
                             "symbol": symbol, "score": str(score), "funding_rate": str(funding),
                             "funding_history": {k: str(v) for k, v in stats.items()},
@@ -315,13 +324,25 @@ class MarketScanner:
                             "break_even_funding_rate": str(break_even),
                             "expected_holding_period_return_pct": str(net/notional*100),
                             "holding_period_assumption": "one next funding interval",
-                            "gross_funding_usdt": str(profit.gross_funding),
-                            "estimated_fees_usdt": str(profit.entry_fees + profit.exit_fees),
-                            "estimated_slippage_cost_usdt": str(profit.slippage),
+                            "gross_funding_usdt": str(gross_funding),
+                            "estimated_fees_usdt": str(entry_fees + exit_fees),
+                            "estimated_slippage_cost_usdt": str(slippage_cost),
                             "estimated_net_usdt": str(net), "status": "ESTIMATED_NOT_REALIZED",
                             "data_freshness": "FRESH", "max_field_age_ms": age_ms,
+                            "field_timestamps_ms": ({} if not self.market_hub or not ws_ready else {
+                                k: v.received_at_ms for k, v in self.market_hub.states[symbol].fields.items()}),
                             "source": "binance_ws" if ws_ready else "binance_rest",
-                            "rejection_reasons": [], "risk_warnings": ["Funding and exit basis are estimates; no execution guarantee."]
+                            "rejection_reasons": [], "risk_warnings": ["Funding and exit basis are estimates; no execution guarantee."],
+                            "scoring_factors": {
+                                "funding_positive_fraction": str(stats["positive_fraction"]),
+                                "funding_volatility": str(stats["volatility"]),
+                                "spot_depth_usdt": str(row["spot_depth_usdt"]),
+                                "futures_depth_usdt": str(row["futures_depth_usdt"]),
+                                "spot_spread_bps": str(ss), "futures_spread_bps": str(fs),
+                                "slippage_bps": str(sum(slips, Decimal("0"))),
+                                "basis_bps": str(bps), "hedge_mismatch_fraction": str(hedge["mismatch_fraction"]),
+                                "max_field_age_ms": str(age_ms)
+                            }
                         })
                     except (KeyError, ValueError, ArithmeticError, TypeError) as exc:
                         self._reject(symbol, f"validation or enrichment error:{type(exc).__name__}", now)
