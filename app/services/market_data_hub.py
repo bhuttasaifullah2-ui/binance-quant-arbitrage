@@ -68,8 +68,11 @@ class MarketDataHub:
             values.update({f"{market}_bid": data.get("b"), f"{market}_ask": data.get("a"),
                            f"{market}_bid_qty": data.get("B"), f"{market}_ask_qty": data.get("A")})
         elif "markprice" in stream_name or all(k in data for k in ("p", "i", "r", "T")):
+            next_funding = data.get("T")
+            if next_funding is not None:
+                next_funding = int(next_funding) - self.clock_offsets_ms.get("futures", 0)
             values.update({"futures_mark": data.get("p"), "futures_index": data.get("i"),
-                           "funding_rate": data.get("r"), "next_funding_time_ms": data.get("T")})
+                           "funding_rate": data.get("r"), "next_funding_time_ms": next_funding})
             stream_name = "futures:markprice"
         elif "ticker" in stream_name or "24hr" in stream_name or "mini" in stream_name:
             market = "spot" if market_hint == "spot" else "futures"
