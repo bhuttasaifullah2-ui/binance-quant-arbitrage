@@ -1,6 +1,5 @@
 import sqlite3
 from pathlib import Path
-from decimal import Decimal
 from typing import Any
 
 SCHEMA = """
@@ -18,6 +17,16 @@ CREATE TABLE IF NOT EXISTS market_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_market_symbol_time ON market_observations(symbol, observed_at_ms DESC);
 CREATE INDEX IF NOT EXISTS idx_market_time ON market_observations(observed_at_ms DESC);
+CREATE TABLE IF NOT EXISTS funding_observations (
+ id INTEGER PRIMARY KEY AUTOINCREMENT,
+ symbol TEXT NOT NULL,
+ funding_time_ms INTEGER NOT NULL,
+ funding_rate TEXT NOT NULL,
+ observed_at_ms INTEGER NOT NULL,
+ source TEXT NOT NULL DEFAULT 'binance_rest',
+ UNIQUE(symbol, funding_time_ms)
+);
+CREATE INDEX IF NOT EXISTS idx_funding_symbol_time ON funding_observations(symbol, funding_time_ms DESC);
 """
 
 class SQLiteMarketStore:
@@ -47,6 +56,26 @@ class SQLiteMarketStore:
             cur = conn.execute(f"INSERT OR IGNORE INTO market_observations ({','.join(keys)}) VALUES ({placeholders})", values)
             return cur.rowcount == 1
 
+    def save_funding_observations(self, symbol: str, rows: list[dict[str, Any]], observed_at_ms: int) -> int:
+        inserted = 0
+        with self._connect() as conn:
+            for row in rows:
+                if "fundingTime" not in row or "fundingRate" not in row:
+                    continue
+                cur = conn.execute("""INSERT OR IGNORE INTO funding_observations
+                    (symbol,funding_time_ms,funding_rate,observed_at_ms,source)
+                    VALUES (?,?,?,?,?)""",
+                    (symbol.upper(), int(row["fundingTime"]), str(row["fundingRate"]), observed_at_ms, "binance_rest"))
+                inserted += cur.rowcount
+        return inserted
+
+    def funding_history(self, symbol: str, limit: int = 100) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute("""SELECT symbol,funding_time_ms,funding_rate,observed_at_ms,source
+                FROM funding_observations WHERE symbol=? ORDER BY funding_time_ms DESC LIMIT ?""",
+                (symbol.upper(), limit)).fetchall()
+        return [dict(row) for row in rows]
+
     def history(self, symbol: str, limit: int = 100) -> list[dict[str, Any]]:
         with self._connect() as conn:
             rows = conn.execute("SELECT * FROM market_observations WHERE symbol=? ORDER BY observed_at_ms DESC LIMIT ?",
@@ -63,8 +92,9 @@ class SQLiteMarketStore:
     def prune(self, now_ms: int) -> int:
         cutoff = now_ms - self.retention_days * 86400000
         with self._connect() as conn:
-            cur = conn.execute("DELETE FROM market_observations WHERE observed_at_ms < ?", (cutoff,))
-            return cur.rowcount
+            a = conn.execute("DELETE FROM market_observations WHERE observed_at_ms < ?", (cutoff,)).rowcount
+            conn.execute("DELETE FROM funding_observations WHERE funding_time_ms < ?", (cutoff,))
+            return a
 
     def count(self) -> int:
         with self._connect() as conn:
