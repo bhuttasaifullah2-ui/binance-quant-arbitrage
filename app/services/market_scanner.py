@@ -406,6 +406,7 @@ class MarketScanner:
                                 self._reject(symbol, rejection.explanation, now, rejection.code)
                             self._eligibility_decisions[symbol] = gate.as_dict()
                             continue
+                        self._eligibility_decisions[symbol] = gate.as_dict()
                         row = {"symbol": symbol, "spot_bid": spot_bid, "spot_ask": spot_ask,
                                "spot_last": _d(st["lastPrice"]), "spot_quote_volume": sv,
                                "futures_bid": fut_bid, "futures_ask": fut_ask,
