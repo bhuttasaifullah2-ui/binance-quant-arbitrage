@@ -132,6 +132,8 @@ class MarketScanner:
                         funding_obs=[FundingObservation(symbol,_d(x["fundingRate"]),int(x["fundingTime"]))
                                      for x in hist if "fundingRate" in x and "fundingTime" in x]
                         stats=summarize_funding(funding_obs)
+                        ordered_funding = sorted(funding_obs, key=lambda x: x.funding_time_ms)
+                        funding_trend_delta = (ordered_funding[-1].funding_rate - ordered_funding[0].funding_rate) if len(ordered_funding) >= 2 else None
                         self.store.save_funding_observations(symbol, hist, now)
                         funding_interval = detect_funding_interval_hours([x.funding_time_ms for x in funding_obs])
                         spot_depth=sum((_d(p)*_d(q) for p,q in sd["bids"][:self.config.depth_levels]),Decimal("0")) + sum((_d(p)*_d(q) for p,q in sd["asks"][:self.config.depth_levels]),Decimal("0"))
@@ -179,6 +181,7 @@ class MarketScanner:
                         break_even_rate = (profit.entry_fees + profit.exit_fees + profit.slippage) / notional
                         out.append({"symbol":symbol,"score":str(score),"funding_rate":str(funding),
                             "funding_history":{k:str(v) for k,v in stats.items()},
+                            "funding_trend_delta":None if funding_trend_delta is None else str(funding_trend_delta),
                             "next_funding_time_ms":next_funding,"funding_interval_hours":funding_interval,
                             "spot_price":str(spot_ask),"futures_mark":str(mark),
                             "spot_volume_24h_usdt":str(sv),"futures_volume_24h_usdt":str(fv),
