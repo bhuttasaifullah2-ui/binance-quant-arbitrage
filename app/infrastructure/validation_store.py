@@ -88,8 +88,8 @@ class ValidationStore:
                     "funding_rate": None if row is None else row.get("funding_rate"),
                     "basis_bps": None if row is None else row.get("basis_bps"),
                     "liquidity": None if row is None else [row.get("spot_depth_usdt"), row.get("futures_depth_usdt")],
-                    "data_quality": None if row is None else [row.get("data_freshness"), row.get("max_field_age_ms")],
-                    "websocket_health": websocket_status or {},
+                    "data_quality": decision.get("data_quality") or (None if row is None else [row.get("data_freshness"), row.get("max_field_age_ms")]),
+                    "websocket_health": decision.get("websocket_health") or websocket_status or {},
                 }
                 old = prior.get(symbol)
                 changes = []
