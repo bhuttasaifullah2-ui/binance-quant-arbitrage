@@ -37,7 +37,7 @@ class BinanceWebSocketManager:
             self.hub.set_symbols({s.upper() for s in normalized})
             self._changed.set()
 
-    def _shards(self) -> list[tuple[str, list[str]]]:
+    def _shards(self) -> list[tuple[str, str, list[str]]]:
         symbols = [s.lower() for s in sorted(self.hub.symbols)]
         spot = [f"{s}@bookTicker" for s in symbols]
         spot += [f"{s}@ticker" for s in symbols]
