@@ -117,6 +117,15 @@ class MarketDataHub:
                 "symbol_count": len(items)}
 
     def stream_health(self) -> dict[str, Any]:
-        return {"streams": self.health, "symbol_count": len(self.symbols),
+        now = int(time.time()*1000)
+        streams = {}
+        for market, value in self.health.items():
+            item = dict(value)
+            last = item.get("last_event_ms")
+            age = None if last is None else max(0, now-int(last))
+            item["last_event_age_ms"] = age
+            item["stale"] = age is None or age > self.max_event_delay_ms
+            streams[market] = item
+        return {"streams": streams, "symbol_count": len(self.symbols),
                 "clock_offsets_ms": self.clock_offsets_ms, "clock_sync_at_ms": self.clock_sync_at_ms,
                 "live_trading_enabled": False}
