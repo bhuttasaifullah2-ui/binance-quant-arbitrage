@@ -104,7 +104,8 @@ class MarketScanner:
                     "futures_last": ft.get("lastPrice"), "futures_quote_volume": ft.get("quoteVolume"),
                     "futures_mark": pi.get("markPrice"), "futures_index": pi.get("indexPrice"),
                     "funding_rate": pi.get("lastFundingRate"),
-                    "next_funding_time_ms": pi.get("nextFundingTime")}, now, now)
+                    "next_funding_time_ms": (int(pi["nextFundingTime"]) - self.market_hub.clock_offsets_ms.get("futures", 0)
+                                             if pi.get("nextFundingTime") is not None else None)}, now, now)
 
     def _hub_maps(self, common: list[str], now: int) -> tuple[dict, dict, dict, dict, dict]:
         spot_t: dict[str, Any] = {}; spot_b: dict[str, Any] = {}
@@ -237,7 +238,8 @@ class MarketScanner:
                         spot_ask, spot_bid = _d(sb["askPrice"]), _d(sb["bidPrice"])
                         fut_ask, fut_bid = _d(fb["askPrice"]), _d(fb["bidPrice"])
                         mark, index = _d(pi["markPrice"]), _d(pi["indexPrice"])
-                        next_funding = int(pi["nextFundingTime"])
+                        next_funding = (int(pi["nextFundingTime"]) - (self.market_hub.clock_offsets_ms.get("futures", 0)
+                                          if self.market_hub else 0))
                         notional = _d(self.config.trade_notional_usdt)
                         spot_filter = SymbolFilters.from_exchange_info(spot_meta[symbol], "spot")
                         futures_filter = SymbolFilters.from_exchange_info(futures_meta[symbol], "futures")
