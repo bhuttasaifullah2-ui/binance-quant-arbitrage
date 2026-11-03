@@ -142,7 +142,7 @@ class LiveValidationService:
             "status":"HEALTHY" if symbols and stale_count<=self.max_stale_symbols and all(x["eligible"] for x in symbols.values()) else "WARNING"}
     async def validate_funding(self, symbol: str = "BTCUSDT") -> dict[str, Any]:
         from app.domain.funding import detect_funding_interval_hours, funding_history_gaps
-        from app.exchange.binance.funding_history import fetch_funding_history, fetch_funding_history_with_stats
+        from app.exchange.binance.funding_history import fetch_funding_history_with_stats
 
         symbol = symbol.upper()
         now = int(time.time() * 1000)
