@@ -32,7 +32,7 @@ All calls are public and require no API key. No authenticated endpoints or order
 
 ## WebSockets
 
-An optional generic combined-stream consumer is provided in app/exchange/binance/websocket.py, with reconnect/backoff. It is disabled by default; the current scanner uses REST snapshots. Configure public stream names explicitly before enabling it. It is not yet wired into the scanner source-of-truth path.
+Phase 2.1 integrates the sharded combined-stream manager into the scanner source-of-truth path when WEBSOCKET_ENABLED=true. See docs/PHASE_2_1_ARCHITECTURE.md for the current data flow. Phase 2.2 adds independent opt-in public connectivity and clock validation. Neither a one-message connectivity probe nor deterministic CI certifies long-run WebSocket stability.
 
 ## Scanner and ranking
 

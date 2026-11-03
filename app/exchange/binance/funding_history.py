@@ -3,14 +3,16 @@ from typing import Any
 from app.exchange.binance.public_client import BinancePublicClient
 
 
-async def fetch_funding_history(client: BinancePublicClient, symbol: str, *,
-                                start_time_ms: int | None = None,
-                                end_time_ms: int | None = None,
-                                page_size: int = 1000, max_pages: int = 20) -> list[dict[str, Any]]:
+async def fetch_funding_history_with_stats(client: BinancePublicClient, symbol: str, *,
+                                          start_time_ms: int | None = None,
+                                          end_time_ms: int | None = None,
+                                          page_size: int = 1000,
+                                          max_pages: int = 20) -> tuple[list[dict[str, Any]], int]:
     if not 1 <= page_size <= 1000 or max_pages < 1:
         raise ValueError("page_size must be 1..1000 and max_pages positive")
     cursor = start_time_ms
     seen: dict[int, dict[str, Any]] = {}
+    duplicates = 0
     for _ in range(max_pages):
         page = await client.futures_funding_history(symbol, page_size, start_time_ms=cursor,
                                                     end_time_ms=end_time_ms)
@@ -20,7 +22,10 @@ async def fetch_funding_history(client: BinancePublicClient, symbol: str, *,
         if not valid:
             break
         for row in valid:
-            seen[int(row["fundingTime"])] = row
+            stamp = int(row["fundingTime"])
+            if stamp in seen:
+                duplicates += 1
+            seen[stamp] = row
         latest = max(int(x["fundingTime"]) for x in valid)
         if len(page) < page_size or (end_time_ms is not None and latest >= end_time_ms):
             break
@@ -28,4 +33,14 @@ async def fetch_funding_history(client: BinancePublicClient, symbol: str, *,
         if cursor is not None and next_cursor <= cursor:
             break
         cursor = next_cursor
-    return [seen[t] for t in sorted(seen)]
+    return [seen[t] for t in sorted(seen)], duplicates
+
+
+async def fetch_funding_history(client: BinancePublicClient, symbol: str, *,
+                                start_time_ms: int | None = None,
+                                end_time_ms: int | None = None,
+                                page_size: int = 1000, max_pages: int = 20) -> list[dict[str, Any]]:
+    rows, _ = await fetch_funding_history_with_stats(
+        client, symbol, start_time_ms=start_time_ms, end_time_ms=end_time_ms,
+        page_size=page_size, max_pages=max_pages)
+    return rows
