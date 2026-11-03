@@ -98,6 +98,7 @@ async def lifespan(app: FastAPI):
 
     hub.event_sink = lambda market, symbol, stream, event_ms, received_ms, payload: store.save_market_event(
         market, symbol, stream, event_ms, received_ms, payload)
+    hub.quality_sink = lambda event, event_ms: store.save_quality_event(event, event_ms)
     websocket_manager = BinanceWebSocketManager(
         hub, settings.binance_spot_ws_url, settings.binance_futures_ws_url,
         recovery=recover_snapshots, streams_per_connection=settings.websocket_streams_per_connection,
