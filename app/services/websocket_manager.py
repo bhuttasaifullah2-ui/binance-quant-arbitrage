@@ -33,7 +33,8 @@ class BinanceWebSocketManager:
             "reconnect_attempts": 0, "reconnect_count": 0, "messages": 0,
             "consecutive_failures": 0, "last_message_ms": None, "last_update_id": None,
             "total_processing_latency_ms": 0.0, "max_processing_latency_ms": 0.0,
-            "subscription_status": "PENDING", "recovery_durations_ms": [], "uptime_ms": 0})
+            "subscription_status": "PENDING", "recovery_durations_ms": [], "uptime_ms": 0,
+            "initial_connection_attempted": False})
 
     def _set_health(self, market: str, value: dict[str, Any]) -> None:
         metric = self._metric(market)
@@ -76,13 +77,16 @@ class BinanceWebSocketManager:
         delay = 1.0
         while not self._stop.is_set():
             metric = self._metric(market)
-            metric["reconnect_attempts"] += 1
+            if metric["initial_connection_attempted"]:
+                metric["reconnect_attempts"] += 1
+            else:
+                metric["initial_connection_attempted"] = True
             self._recovery_started.setdefault(market, int(time.time() * 1000))
             try:
                 async with websockets.connect(endpoint, ping_interval=20, ping_timeout=20,
                                                close_timeout=5, max_size=2**20) as ws:
                     now = int(time.time() * 1000)
-                    if metric["disconnect_count"] or metric["reconnect_attempts"] > 1:
+                    if metric["disconnect_count"]:
                         metric["reconnect_count"] += 1
                         metric["consecutive_failures"] = 0
                         metric["recovery_durations_ms"].append(max(0, now-self._recovery_started[market]))
@@ -90,6 +94,8 @@ class BinanceWebSocketManager:
                         if self.event_sink:
                             self.event_sink(now, "WEBSOCKET_RECOVERED", None, "HEALTHY",
                                 {"market": market, "recovery_duration_ms": metric["recovery_durations_ms"][-1]})
+                    elif self.event_sink:
+                        self.event_sink(now, "WEBSOCKET_CONNECTED", None, "HEALTHY", {"market": market})
                     self._connected_since[market] = now
                     self._set_health(market, {"connected": True, "streams": len(streams),
                         "subscription_status": "SUBSCRIBED", "last_connected_ms": now})
