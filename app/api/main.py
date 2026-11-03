@@ -105,7 +105,8 @@ async def lifespan(app: FastAPI):
     websocket_manager = BinanceWebSocketManager(
         hub, settings.binance_spot_ws_url, settings.binance_futures_ws_url,
         recovery=recover_snapshots, streams_per_connection=settings.websocket_streams_per_connection,
-        health_sink=lambda market, health, now_ms: store.save_ws_health(market, health, now_ms))
+        health_sink=lambda market, health, now_ms: store.save_ws_health(market, health, now_ms),
+        event_sink=lambda at_ms, kind, symbol, status, payload: validation_store.event(at_ms, kind, symbol, status, payload))
     scanner = MarketScanner(client, store, settings, hub, websocket_manager)
     validation_store = ValidationStore(settings.database_path, settings.retention_days)
     validator = LiveValidationService(client, hub, websocket_manager, validation_store,
