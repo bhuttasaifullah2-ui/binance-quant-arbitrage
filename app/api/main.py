@@ -76,34 +76,34 @@ async def health(request: Request):
 
 @app.get("/api/v1/market/overview")
 @app.get("/market/overview")
-async def market_overview(request: Request, limit: int = Query(100, ge=1, le=500)):
+async def market_overview(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
     scanner = _scanner(request)
-    return {"scanner": scanner.status(), "opportunities": scanner.fresh_opportunities[:limit]}
+    return {"scanner": scanner.status(), "opportunities": scanner.fresh_opportunities[offset:offset+limit]}
 
 @app.get("/api/v1/market/spot")
-async def spot_market(request: Request, limit: int = Query(100, ge=1, le=500)):
+async def spot_market(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
     store = request.app.state.market_store
-    return {"items": store.latest(limit), "limit": limit}
+    return {"items": store.latest(limit, offset), "limit": limit, "offset": offset}
 
 @app.get("/api/v1/market/futures")
-async def futures_market(request: Request, limit: int = Query(100, ge=1, le=500)):
+async def futures_market(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
     store = request.app.state.market_store
     return {"items": store.latest(limit), "limit": limit}
 
 @app.get("/api/v1/funding/current")
-async def current_funding(request: Request, limit: int = Query(100, ge=1, le=500)):
+async def current_funding(request: Request, limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
     return {"items": request.app.state.market_store.latest(limit), "limit": limit}
 
 @app.get("/api/v1/funding/history/{symbol}")
-async def funding_history(request: Request, symbol: str, limit: int = Query(100, ge=1, le=1000)):
-    rows = request.app.state.market_store.funding_history(symbol, limit)
+async def funding_history(request: Request, symbol: str, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)):
+    rows = request.app.state.market_store.funding_history(symbol, limit, offset)
     if not rows:
         raise HTTPException(status_code=404, detail="No stored funding history for symbol")
-    return {"symbol": symbol.upper(), "items": rows, "limit": limit}
+    return {"symbol": symbol.upper(), "items": rows, "limit": limit, "offset": offset}
 
 @app.get("/api/v1/scanner/opportunities", response_model=list[OpportunityResponse])
-async def opportunities(request: Request, limit: int = Query(50, ge=1, le=200)):
-    return _scanner(request).fresh_opportunities[:limit]
+async def opportunities(request: Request, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)):
+    return _scanner(request).fresh_opportunities[offset:offset+limit]
 
 @app.get("/api/v1/scanner/status", response_model=StatusResponse)
 async def scanner_status(request: Request):
