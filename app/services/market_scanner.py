@@ -8,6 +8,7 @@ from app.domain.exchange_filters import SymbolFilters, matched_valid_hedge
 from app.domain.funding import summarize_funding, detect_funding_interval_hours, funding_history_gaps
 from app.domain.market_quality import basis_bps, spread_bps
 from app.domain.models import FundingObservation
+from app.domain.scanner_eligibility import validate_scanner_eligibility
 from app.domain.orderbook import estimate_vwap, estimate_vwap_quantity
 from app.domain.ranking import score_opportunity_breakdown, RankingWeights
 from app.exchange.binance.funding_history import fetch_funding_history
@@ -54,6 +55,7 @@ class MarketScanner:
         self._futures_info: dict[str, Any] | None = None
         self.clock_offset_ms = 0
         self._observed_symbols: set[str] = set()
+        self._eligibility_decisions: dict[str, dict[str, Any]] = {}
         self._ws_bootstrap_done = False
 
     @property
@@ -72,8 +74,11 @@ class MarketScanner:
     def rejections(self) -> list[dict[str, Any]]:
         return list(self._rejections)
 
-    def _reject(self, symbol: str, reason: str, now_ms: int) -> None:
-        item = {"symbol": symbol, "reason": reason, "event_time_ms": now_ms}
+    def _reject(self, symbol: str, reason: str, now_ms: int, code: str = "SCANNER_FILTER_REJECTED") -> None:
+        item = {"symbol": symbol, "reason": reason, "explanation": reason,
+                "rejection_code": code, "rejection_codes": [code], "event_time_ms": now_ms,
+                "eligible": False, "status": "REJECTED"}
+        self._eligibility_decisions[symbol.upper()] = item
         self._rejections.append(item)
         self._rejections = self._rejections[-500:]
         self.store.save_quality_event(item, now_ms)
@@ -138,6 +143,7 @@ class MarketScanner:
         async with self._lock:
             started = int(time.time() * 1000)
             self._rejections = []
+            self._eligibility_decisions = {}
             try:
                 spot_info, fut_info = await self._metadata(started)
                 spot_symbols, fut_symbols = _eligible_spot(spot_info), _eligible_futures(fut_info)
@@ -343,6 +349,61 @@ class MarketScanner:
                             self._reject(symbol, "funding history absent/expired or estimated net edge below threshold", now); continue
                         spot_visible_depth = sum((_d(p)*_d(q) for p,q in sd["bids"][:self.config.depth_levels]), Decimal("0")) + sum((_d(p)*_d(q) for p,q in sd["asks"][:self.config.depth_levels]), Decimal("0"))
                         futures_visible_depth = sum((_d(p)*_d(q) for p,q in fd["bids"][:self.config.depth_levels]), Decimal("0")) + sum((_d(p)*_d(q) for p,q in fd["asks"][:self.config.depth_levels]), Decimal("0"))
+                        # All candidate opportunities pass this one final, shared gate.
+                        state = self.market_hub.states.get(symbol) if self.market_hub else None
+                        required_fields = ("spot_bid", "spot_ask", "spot_last", "spot_quote_volume",
+                            "futures_bid", "futures_ask", "futures_last", "futures_quote_volume",
+                            "futures_mark", "futures_index", "funding_rate", "next_funding_time_ms")
+                        if state is not None:
+                            quality = state.freshness(now, self.config.max_data_age_seconds*1000, required_fields)
+                            field_ages = quality["ages_ms"]
+                            funding_field = state.fields.get("funding_rate")
+                            funding_age = None if funding_field is None else max(0, now-funding_field.received_at_ms)
+                        else:
+                            field_ages = {name: max(0, now-(rest_snapshot_ms or now)) for name in required_fields}
+                            funding_age = max(0, now-(rest_snapshot_ms or now))
+                            quality = {"valid": bool(rest_snapshot_ms), "reasons": [] if rest_snapshot_ms else ["missing REST snapshot"]}
+                        ws_feeds = {}
+                        if self.config.websocket_enabled:
+                            metrics = getattr(self.websocket_manager, "metrics", {}) if self.websocket_manager else {}
+                            for market in ("spot", "futures"):
+                                metric = metrics.get(market, {})
+                                msg_at = metric.get("last_message_ms")
+                                msg_age = None if msg_at is None else max(0, now-int(msg_at))
+                                ws_feeds[market] = {"healthy": bool(metric.get("connected")) and
+                                    msg_age is not None and msg_age <= self.config.max_data_age_seconds*1000 and
+                                    metric.get("subscription_status") == "SUBSCRIBED"}
+                        else:
+                            ws_feeds = {"spot": {"healthy": True}, "futures": {"healthy": True}}
+                        spot_filter_ok = spot_filter.status == "TRADING" and not spot_filter.validate(hedge["spot_quantity"], spot_buy.vwap)
+                        futures_filter_ok = futures_filter.status == "TRADING" and not futures_filter.validate(hedge["futures_quantity"], fut_sell.vwap)
+                        gate = validate_scanner_eligibility(symbol, now, {
+                            "market_fields": {"spot_bid": spot_bid, "spot_ask": spot_ask,
+                                "spot_last": st.get("lastPrice"), "spot_quote_volume": sv,
+                                "futures_bid": fut_bid, "futures_ask": fut_ask,
+                                "futures_last": ft.get("lastPrice"), "futures_quote_volume": fv,
+                                "futures_mark": mark, "futures_index": index,
+                                "funding_rate": funding, "next_funding_time_ms": next_funding},
+                            "field_ages_ms": field_ages, "max_data_age_ms": self.config.max_data_age_seconds*1000,
+                            "market_data_stale": not quality["valid"],
+                            "websocket_enabled": bool(self.config.websocket_enabled), "websocket_feeds": ws_feeds,
+                            "clock_offsets_ms": self.market_hub.clock_offsets_ms if self.market_hub else {},
+                            "max_clock_drift_ms": getattr(self.config, "max_clock_drift_ms", self.config.max_clock_skew_ms),
+                            "clock_sync_required": bool(self.config.websocket_enabled or self.config.live_validation_enabled),
+                            "spot_filters_valid": spot_filter_ok, "futures_filters_valid": futures_filter_ok,
+                            "funding_age_ms": funding_age, "max_funding_age_ms": self.config.max_data_age_seconds*1000,
+                            "funding_gaps": history_gaps, "funding_inconsistent": False,
+                            "hedge_valid": bool(hedge.get("executable")) and not actual_validation,
+                            "residual_exposure_usdt": hedge.get("residual_directional_exposure"),
+                            "max_residual_exposure_usdt": matched_notional*_d(self.config.max_hedge_mismatch),
+                            "min_orderbook_depth_usdt": _d(self.config.trade_notional_usdt),
+                            "spot_orderbook_depth_usdt": spot_visible_depth,
+                            "futures_orderbook_depth_usdt": futures_visible_depth})
+                        self._eligibility_decisions[symbol] = gate.as_dict()
+                        if not gate.eligible:
+                            for rejection in gate.rejections:
+                                self._reject(symbol, rejection.explanation, now, rejection.code)
+                            continue
                         row = {"symbol": symbol, "spot_bid": spot_bid, "spot_ask": spot_ask,
                                "spot_last": _d(st["lastPrice"]), "spot_quote_volume": sv,
                                "futures_bid": fut_bid, "futures_ask": fut_ask,
