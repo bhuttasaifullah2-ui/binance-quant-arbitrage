@@ -98,26 +98,30 @@ class LiveValidationService:
         return {"checked_at_ms":now,"status":"HEALTHY" if all(x.get("status")=="HEALTHY" for x in streams.get("streams",{}).values()) and streams.get("streams") else "WARNING",
                 "streams":streams.get("streams",{}),"live_trading_enabled":False}
     def data_quality(self) -> dict[str,Any]:
-        raw=self.hub.data_quality(max_age_ms=self.max_message_age_ms)
-        now=int(time.time()*1000); fields=("spot_bid","spot_ask","spot_last","futures_bid","futures_ask","futures_mark","futures_index","funding_rate")
+        now=int(time.time()*1000)
+        required=("spot_bid","spot_ask","spot_last","futures_bid","futures_ask",
+                  "futures_mark","futures_index","funding_rate")
         symbols={}
-        for symbol,values in raw.get("symbols",{}).items():
-            missing=[]; invalid=[]; stale=[]
-            for field in fields:
-                item=values.get(field,{})
-                if not item or item.get("value") is None: missing.append(field); continue
+        for symbol,state in self.hub.states.items():
+            missing=[]; invalid=[]; stale=[]; ages={}
+            for field in required:
+                item=state.fields.get(field)
+                if item is None:
+                    missing.append(field); ages[field]=None; continue
+                age=max(0,now-item.received_at_ms); ages[field]=age
                 try:
-                    if field.endswith("time_ms"): continue
-                    if Decimal(str(item["value"]))<=0 and field!="funding_rate": invalid.append(field)
-                except (InvalidOperation,ValueError,TypeError): invalid.append(field)
-                age=item.get("age_ms")
-                if age is not None and age>self.max_message_age_ms: stale.append(field)
+                    value=Decimal(str(item.value))
+                    if field!="funding_rate" and value<=0: invalid.append(field)
+                except (InvalidOperation,ValueError,TypeError):
+                    invalid.append(field)
+                if age>self.max_message_age_ms: stale.append(field)
             status="INVALID" if invalid else "MISSING" if missing else "STALE" if stale else "HEALTHY"
             symbols[symbol]={"status":status,"missing_fields":missing,"invalid_fields":invalid,
-                             "stale_fields":stale,"checked_at_ms":now,"eligible":status=="HEALTHY"}
+                "stale_fields":stale,"field_age_ms":ages,"eligible":status=="HEALTHY",
+                "checked_at_ms":now}
         return {"checked_at_ms":now,"symbols":symbols,"symbol_count":len(symbols),
-                "eligible_symbol_count":sum(1 for x in symbols.values() if x["eligible"]),
-                "status":"HEALTHY" if symbols and all(x["eligible"] for x in symbols.values()) else "WARNING"}
+            "eligible_symbol_count":sum(1 for x in symbols.values() if x["eligible"]),
+            "status":"HEALTHY" if symbols and all(x["eligible"] for x in symbols.values()) else "WARNING"}
     async def validate_funding(self,symbol: str="BTCUSDT") -> dict[str,Any]:
         current=await self.client.futures_premium_index()
         item=next((x for x in current if x.get("symbol")==symbol.upper()),None)
