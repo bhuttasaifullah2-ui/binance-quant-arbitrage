@@ -37,8 +37,9 @@ def summarize_funding(observations: list[FundingObservation]) -> dict[str, Decim
             cn += 1
         else:
             break
+    sorted_rates = sorted(rates)
     mid_index = n // 2
-    median_rate = rates[mid_index] if n % 2 else (rates[mid_index-1] + rates[mid_index]) / 2
+    median_rate = sorted_rates[mid_index] if n % 2 else (sorted_rates[mid_index-1] + sorted_rates[mid_index]) / 2
     window = max(1, min(3, n // 2))
     if n >= 2:
         recent_trend = (sum(rates[-window:], Decimal("0")) / window
