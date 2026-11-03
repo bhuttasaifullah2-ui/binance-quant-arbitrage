@@ -28,15 +28,17 @@ def summarize_funding(observations: list[FundingObservation]) -> dict[str, Decim
     negative = sum(1 for x in rates if x < 0)
     cp = cn = 0
     for rate in reversed(rates):
-        if rate > 0 and cn == 0:
+        if rate > 0:
             cp += 1
         else:
             break
     for rate in reversed(rates):
-        if rate < 0 and cp == 0:
+        if rate < 0:
             cn += 1
         else:
             break
+    mid_index = n // 2
+    median_rate = rates[mid_index] if n % 2 else (rates[mid_index-1] + rates[mid_index]) / 2
     window = max(1, min(3, n // 2))
     if n >= 2:
         recent_trend = (sum(rates[-window:], Decimal("0")) / window
@@ -44,16 +46,14 @@ def summarize_funding(observations: list[FundingObservation]) -> dict[str, Decim
     else:
         recent_trend = Decimal("0")
     positive_fraction = Decimal(positive) / n
-    return {
-        mid_index = n // 2
-    median_rate = rates[mid_index] if n % 2 else (rates[mid_index-1] + rates[mid_index]) / 2
+    negative_fraction = Decimal(negative) / n
     return {
         "count": n, "mean": mean, "median": median_rate,
         "min": min(rates), "max": max(rates),
-        "negative_fraction": Decimal(negative) / n,
+        "negative_fraction": negative_fraction,
         "positive_fraction": positive_fraction,
         "positive_percent": positive_fraction * 100,
-        "negative_percent": Decimal(negative) / n * 100,
+        "negative_percent": negative_fraction * 100,
         "volatility": variance.sqrt(), "stddev": variance.sqrt(),
         "consecutive_positive": cp, "consecutive_negative": cn,
         "recent_trend": recent_trend, "consistency": positive_fraction,
