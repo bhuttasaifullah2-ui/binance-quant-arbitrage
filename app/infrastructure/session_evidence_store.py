@@ -61,6 +61,13 @@ class SessionEvidenceStore:
               id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, observed_at_ms INTEGER NOT NULL,
               symbol TEXT NOT NULL, eligible INTEGER NOT NULL, rejection_codes TEXT NOT NULL,
               payload TEXT NOT NULL, UNIQUE(session_id,symbol,observed_at_ms));
+            CREATE TABLE IF NOT EXISTS session_opportunity_state(
+              session_id TEXT NOT NULL, symbol TEXT NOT NULL, state_json TEXT NOT NULL,
+              updated_at_ms INTEGER NOT NULL, PRIMARY KEY(session_id,symbol));
+            CREATE TABLE IF NOT EXISTS session_opportunity_snapshots(
+              id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, symbol TEXT NOT NULL,
+              observed_at_ms INTEGER NOT NULL, rank INTEGER, payload TEXT NOT NULL,
+              UNIQUE(session_id,symbol,observed_at_ms));
             """)
             # A process that disappeared without a clean shutdown is interrupted,
             # never silently resumed or combined with the new process session.
@@ -140,14 +147,46 @@ class SessionEvidenceStore:
     def record_snapshot(self, opportunities: list[dict[str, Any]], decisions: dict[str, dict[str, Any]],
                         observed_at_ms: int, websocket_status: dict[str, Any] | None = None) -> int:
         emitted = self.legacy.record_snapshot(opportunities, decisions, observed_at_ms, websocket_status)
+        ranked = {str(row["symbol"]).upper(): (rank, row) for rank, row in enumerate(opportunities, 1)}
+        symbols = set(ranked) | {str(key).upper() for key in decisions}
         with self._connect() as db:
-            for symbol, decision in decisions.items():
-                codes = decision.get("rejection_codes", [])
+            for symbol in sorted(symbols):
+                decision = decisions.get(symbol, {})
+                item = ranked.get(symbol)
+                current = {"active": item is not None, "eligible": bool(decision.get("eligible")),
+                           "rejection_codes": sorted(decision.get("rejection_codes", [])),
+                           "rank": None if item is None else item[0],
+                           "opportunity": None if item is None else item[1]}
+                codes = current["rejection_codes"]
                 payload = {**decision, "session_id": self.session_id}
                 db.execute("""INSERT OR IGNORE INTO session_eligibility
                     (session_id,observed_at_ms,symbol,eligible,rejection_codes,payload) VALUES(?,?,?,?,?,?)""",
-                    (self.session_id, observed_at_ms, symbol, int(bool(decision.get("eligible"))),
+                    (self.session_id, observed_at_ms, symbol, int(current["eligible"]),
                      json.dumps(codes), json.dumps(payload, default=str)))
+                db.execute("""INSERT OR IGNORE INTO session_opportunity_snapshots
+                    (session_id,symbol,observed_at_ms,rank,payload) VALUES(?,?,?,?,?)""",
+                    (self.session_id, symbol, observed_at_ms, current["rank"], json.dumps(current, default=str)))
+                previous_row = db.execute(
+                    "SELECT state_json FROM session_opportunity_state WHERE session_id=? AND symbol=?",
+                    (self.session_id, symbol)).fetchone()
+                previous = None if previous_row is None else json.loads(previous_row["state_json"])
+                if previous is not None and previous != current:
+                    if not previous["active"] and current["active"]:
+                        event_type = "OPPORTUNITY_APPEARED"
+                    elif previous["active"] and not current["active"]:
+                        event_type = "OPPORTUNITY_DISAPPEARED"
+                    else:
+                        event_type = "OPPORTUNITY_STATE_CHANGED"
+                    event_payload = {"previous": previous, "current": current}
+                    db.execute("""INSERT INTO session_events
+                        (session_id,event_at_ms,event_type,symbol,status,payload) VALUES(?,?,?,?,?,?)""",
+                        (self.session_id, observed_at_ms, event_type, symbol,
+                         "ELIGIBLE" if current["eligible"] else "REJECTED",
+                         json.dumps(event_payload, sort_keys=True, default=str)))
+                db.execute("""INSERT INTO session_opportunity_state(session_id,symbol,state_json,updated_at_ms)
+                    VALUES(?,?,?,?) ON CONFLICT(session_id,symbol) DO UPDATE SET
+                    state_json=excluded.state_json,updated_at_ms=excluded.updated_at_ms""",
+                    (self.session_id, symbol, json.dumps(current, sort_keys=True, default=str), observed_at_ms))
         return emitted
 
     def record_data_quality(self, observed_at_ms: int, symbols: dict[str, dict[str, Any]]) -> None:
@@ -185,10 +224,12 @@ class SessionEvidenceStore:
             events = db.execute("SELECT * FROM session_events WHERE session_id=? ORDER BY event_at_ms,id",(session_id,)).fetchall()
             quality = db.execute("SELECT * FROM session_quality WHERE session_id=? ORDER BY observed_at_ms,id",(session_id,)).fetchall()
             eligibility = db.execute("SELECT * FROM session_eligibility WHERE session_id=? ORDER BY observed_at_ms,id",(session_id,)).fetchall()
+            opportunity_snapshots = db.execute("SELECT * FROM session_opportunity_snapshots WHERE session_id=? ORDER BY observed_at_ms,id",(session_id,)).fetchall()
         obs = [{**dict(x), "payload":json.loads(x["payload"])} for x in observations]
         ev = [{**dict(x), "payload":json.loads(x["payload"])} for x in events]
         q = [{**dict(x), "codes":json.loads(x["codes"]), "measurements":json.loads(x["measurements"])} for x in quality]
         el = [{**dict(x), "rejection_codes":json.loads(x["rejection_codes"]), "payload":json.loads(x["payload"])} for x in eligibility]
+        snapshots = [{**dict(x), "payload":json.loads(x["payload"])} for x in opportunity_snapshots]
         rest = [x for x in obs if x["category"]=="connectivity"]
         clocks = [x["payload"].get("offset_ms") for x in obs if x["category"]=="clock"]
         ws = [x for x in ev if x["event_type"] in {"WEBSOCKET_CONNECTED","WEBSOCKET_DISCONNECTED","WEBSOCKET_RECOVERED"}]
@@ -217,7 +258,7 @@ class SessionEvidenceStore:
                                  "quality_decisions":len(q)==0,"eligibility_decisions":len(el)==0},
             },
             "observations":obs, "events":ev, "data_quality_decisions":q,
-            "eligibility_decisions":el,
+            "eligibility_decisions":el, "opportunity_snapshots":snapshots,
             "warnings":[ "No uptime is inferred without persisted connection transitions.",
                          "A missing observation is represented as missing, not as a healthy result." ]
         }
