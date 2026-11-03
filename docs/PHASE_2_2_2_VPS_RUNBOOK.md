@@ -378,6 +378,7 @@ Before sharing logs or reports, inspect them for hostnames, public IPs, username
 Create a protected backup directory and use Python's SQLite backup API. This may run while the service is online:
 
 ```bash
+set -euo pipefail
 sudo install -d -o root -g root -m 0700 /var/backups/binance-quant-arbitrage
 BACKUP_PATH="/var/backups/binance-quant-arbitrage/market_data-$(date -u +%Y%m%dT%H%M%SZ).sqlite3"
 sudo env BACKUP_PATH="$BACKUP_PATH" /opt/binance-quant-arbitrage/.venv/bin/python - <<'PY'
@@ -397,7 +398,12 @@ finally:
 print(f"SQLite backup created: {backup_path}")
 PY
 sudo chmod 0600 "$BACKUP_PATH"
-sudo sqlite3 "$BACKUP_PATH" 'PRAGMA integrity_check;'
+INTEGRITY_RESULT="$(sudo sqlite3 "$BACKUP_PATH" 'PRAGMA integrity_check;')"
+if [ "$INTEGRITY_RESULT" != "ok" ]; then
+  echo "ERROR: backup integrity check failed: $INTEGRITY_RESULT" >&2
+  exit 1
+fi
+echo "$INTEGRITY_RESULT"
 ```
 
 Expected integrity output is exactly `ok`. Keep the backup only if the integrity check succeeds. If it reports anything else, preserve the source and backup for investigation and do not treat the backup as valid.
