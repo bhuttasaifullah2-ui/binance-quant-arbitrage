@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     database_path: str = "data/market_data.sqlite3"
     retention_days: int = 90
     websocket_enabled: bool = False
+    live_validation_enabled: bool = False
+    validation_interval_seconds: int = 300
+    max_clock_drift_ms: int = 5000
+    max_validation_message_age_ms: int = 15000
+    websocket_probe_timeout_seconds: float = 5.0
     live_trading_enabled: bool = False
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
