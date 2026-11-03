@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     score_weight_basis: str = "0.10"
     score_weight_freshness: str = "0.10"
     score_weight_funding_volatility: str = "0.05"
+    score_weight_hedge_precision: str = "0.05"
+    score_weight_residual_exposure: str = "0.05"
     ranking_max_spread_bps: str = "10"
     ranking_max_slippage_bps: str = "30"
     ranking_max_basis_bps: str = "100"
