@@ -9,7 +9,6 @@ from app.domain.funding import summarize_funding, detect_funding_interval_hours
 from app.domain.market_quality import basis_bps, spread_bps
 from app.domain.models import FundingObservation
 from app.domain.orderbook import estimate_vwap
-from app.domain.profitability import CostModel, estimate_net_funding
 from app.domain.ranking import score_opportunity, RankingWeights
 from app.exchange.binance.funding_history import fetch_funding_history
 from app.exchange.binance.public_client import BinancePublicClient
@@ -232,10 +231,6 @@ class MarketScanner:
                         if any(x is None or not x.complete for x in executions):
                             self._reject(symbol, "insufficient order-book depth for configured notional", now); continue
                         slips = [x.slippage_bps for x in executions if x is not None]
-                        slip_rate = sum(slips, Decimal("0")) / Decimal("10000")
-                        costs = CostModel(_d(self.config.spot_taker_fee_rate), _d(self.config.futures_taker_fee_rate),
-                                          _d(self.config.spot_taker_fee_rate), _d(self.config.futures_taker_fee_rate),
-                                          slip_rate/4, slip_rate/4)
                         matched_notional = min(hedge["spot_notional"], hedge["futures_notional"])
                         gross_funding = matched_notional * funding
                         entry_fees = (hedge["spot_notional"] * _d(self.config.spot_taker_fee_rate)
@@ -243,15 +238,15 @@ class MarketScanner:
                         exit_fees = entry_fees
                         slippage_cost = sum((x.quote_notional * x.slippage_bps / Decimal("10000")
                                              for x in executions if x is not None), Decimal("0"))
-                        funding_obs = [FundingObservation(symbol, _d(x["fundingRate"]), int(x["fundingTime"]))
-                                       for x in hist if "fundingRate" in x and "fundingTime" in x]
                         if new_history:
                             self.store.save_funding_observations(symbol, new_history, now)
+                        funding_obs = []
+                        for x in hist:
+                            rate = x.get("fundingRate", x.get("funding_rate"))
+                            stamp = x.get("fundingTime", x.get("funding_time_ms"))
+                            if rate is not None and stamp is not None:
+                                funding_obs.append(FundingObservation(symbol, _d(rate), int(stamp)))
                         stats = summarize_funding(funding_obs)
-                        if stats["count"] == 0:
-                            funding_obs = [FundingObservation(symbol, _d(x["funding_rate"]), int(x["funding_time_ms"]))
-                                           for x in hist if "funding_rate" in x and "funding_time_ms" in x]
-                            stats = summarize_funding(funding_obs)
                         funding_interval = detect_funding_interval_hours([x.funding_time_ms for x in funding_obs])
                         bps = basis_bps(spot_ask, mark)
                         basis_penalty = abs(bps)/Decimal("10000")*notional*_d(self.config.basis_risk_haircut)
