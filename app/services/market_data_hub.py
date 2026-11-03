@@ -11,6 +11,7 @@ class MarketDataHub:
         self.max_clock_skew_ms = max_clock_skew_ms
         self.health: dict[str, dict[str, Any]] = {}
         self.quality_events: list[dict[str, Any]] = []
+        self._last_update_ids: dict[str, int] = {}
 
     def set_symbols(self, symbols: set[str]) -> None:
         self.symbols = set(symbols)
@@ -28,6 +29,16 @@ class MarketDataHub:
             return False
         now = received_at_ms or int(time.time() * 1000)
         event_ms = int(data.get("E", data.get("T", 0)) or 0)
+        if event_ms <= 0 and "bookticker" in stream.lower():
+            event_ms = now
+            update_id = int(data.get("u", 0) or 0)
+            update_key = f"{message.get('_market', 'unknown')}:{symbol}:bookticker"
+            previous_id = self._last_update_ids.get(update_key)
+            if update_id and previous_id is not None and update_id <= previous_id:
+                self.quality_events.append({"symbol": symbol, "reason": "duplicate_or_out_of_order_update_id"})
+                return False
+            if update_id:
+                self._last_update_ids[update_key] = update_id
         if event_ms <= 0:
             self.quality_events.append({"symbol": symbol, "reason": "missing_event_timestamp"})
             return False
