@@ -68,3 +68,59 @@ async def daily_observation_report(request: Request, day: str | None = None):
     end = datetime.combine(selected, time.max, tzinfo=timezone.utc)
     return request.app.state.validation_store.statistical_report(
         int(start.timestamp() * 1000), int(end.timestamp() * 1000) + 1)
+
+
+
+@router.get("/api/v1/observation/sessions")
+async def list_observation_sessions(request: Request, limit: int = Query(100, ge=1, le=500)):
+    return {"items": request.app.state.validation_store.list_sessions(limit)}
+
+
+def _session_export(request: Request, session_id: str):
+    try:
+        return request.app.state.validation_store.export_session(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Observation session not found") from exc
+
+
+@router.get("/api/v1/observation/sessions/{session_id}")
+async def observation_session_summary(request: Request, session_id: str):
+    try:
+        return request.app.state.validation_store.session_summary(session_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Observation session not found") from exc
+
+
+@router.get("/api/v1/observation/sessions/{session_id}/report.json")
+async def export_observation_session(request: Request, session_id: str):
+    return _session_export(request, session_id)
+
+
+@router.get("/api/v1/observation/sessions/{session_id}/rest")
+async def session_rest_statistics(request: Request, session_id: str):
+    return _session_export(request, session_id)["summary"]["rest_checks"]
+
+
+@router.get("/api/v1/observation/sessions/{session_id}/websocket")
+async def session_websocket_statistics(request: Request, session_id: str):
+    return _session_export(request, session_id)["summary"]["websocket"]
+
+
+@router.get("/api/v1/observation/sessions/{session_id}/clock")
+async def session_clock_statistics(request: Request, session_id: str):
+    return _session_export(request, session_id)["summary"]["clock"]
+
+
+@router.get("/api/v1/observation/sessions/{session_id}/data-quality")
+async def session_data_quality_statistics(request: Request, session_id: str):
+    return _session_export(request, session_id)["summary"]["data_quality"]
+
+
+@router.get("/api/v1/observation/sessions/{session_id}/eligibility")
+async def session_eligibility_statistics(request: Request, session_id: str):
+    return _session_export(request, session_id)["summary"]["scanner_eligibility"]
+
+
+@router.get("/api/v1/observation/sessions/{session_id}/funding")
+async def session_funding_statistics(request: Request, session_id: str):
+    return _session_export(request, session_id)["summary"]["funding"]
