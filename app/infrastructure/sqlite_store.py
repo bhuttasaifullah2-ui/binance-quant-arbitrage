@@ -1,6 +1,7 @@
 """SQLite persistence with additive, restart-safe schema upgrades."""
 import json
 import sqlite3
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
@@ -165,8 +166,26 @@ class SQLiteMarketStore:
             latest = conn.execute("SELECT MAX(observed_at_ms) FROM opportunity_observations").fetchone()[0]
             active = conn.execute("""SELECT COUNT(*) FROM (
                 SELECT symbol, MAX(observed_at_ms) ts FROM opportunity_observations GROUP BY symbol)""").fetchone()[0]
+            rows = conn.execute("""SELECT score, expected_net_usdt, payload_json
+                FROM opportunity_observations ORDER BY observed_at_ms DESC LIMIT 1000""").fetchall()
+        scores = [Decimal(str(x["score"])) for x in rows]
+        net = [Decimal(str(x["expected_net_usdt"])) for x in rows]
+        funding = []
+        basis = []
+        for row in rows:
+            payload = json.loads(row["payload_json"])
+            if payload.get("funding_rate") is not None:
+                funding.append(Decimal(str(payload["funding_rate"])))
+            if payload.get("basis_bps") is not None:
+                basis.append(Decimal(str(payload["basis_bps"])))
+        count = Decimal(len(rows)) if rows else Decimal("1")
         return {"opportunity_snapshots": int(total), "lifecycle_events": int(events),
-                "symbols_observed": int(active), "last_observation_ms": latest}
+                "symbols_observed": int(active), "last_observation_ms": latest,
+                "recent_sample_count": len(rows),
+                "average_score_recent": str(sum(scores, Decimal("0"))/count) if scores else None,
+                "average_estimated_net_usdt_recent": str(sum(net, Decimal("0"))/count) if net else None,
+                "average_funding_rate_recent": str(sum(funding, Decimal("0"))/Decimal(len(funding))) if funding else None,
+                "average_basis_bps_recent": str(sum(basis, Decimal("0"))/Decimal(len(basis))) if basis else None}
 
     def save_quality_event(self, event: dict[str, Any], event_time_ms: int) -> None:
         with self._connect() as conn:
