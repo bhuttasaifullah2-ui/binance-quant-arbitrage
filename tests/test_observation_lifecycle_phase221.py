@@ -14,7 +14,7 @@ def test_lifecycle_events_are_deduplicated_and_survive_restart(tmp_path):
     assert store.record_snapshot([opportunity], decision, 1000, {"spot": True, "futures": True}) == 1
     assert store.record_snapshot([opportunity], decision, 2000, {"spot": True, "futures": True}) == 0
     reopened = ValidationStore(path)
-    changed = {**opportunity, "score": "0.8", "funding_rate": "0.0002"}
+    changed = {**opportunity, "score": "0.8", "funding_rate": "0.0002", "basis_bps": "3.5"}
     assert reopened.record_snapshot([changed], decision, 3000, {"spot": True, "futures": True}) == 2
     assert reopened.record_snapshot([], {"BTCUSDT": {"eligible": False, "rejection_codes": ["STALE"]}}, 4000) >= 2
     event_types = [x["event_type"] for x in reopened.events(100)]
