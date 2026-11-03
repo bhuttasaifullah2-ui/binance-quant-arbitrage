@@ -5,7 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS market_observations (
@@ -77,7 +77,7 @@ class SQLiteMarketStore:
             if row is None:
                 conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
             elif int(row["version"]) < SCHEMA_VERSION:
-                # All changes in v2 are additive CREATE TABLE/INDEX operations above.
+                # Phase 2.1 changes are additive CREATE TABLE/INDEX operations above.
                 conn.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
 
     def save_observation(self, row: dict[str, Any]) -> bool:
