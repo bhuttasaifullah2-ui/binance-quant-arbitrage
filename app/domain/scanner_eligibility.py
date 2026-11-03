@@ -75,6 +75,8 @@ def validate_scanner_eligibility(
     numeric = [name for name in required if name != "next_funding_time_ms"]
     invalid = []
     for name in numeric:
+        if fields.get(name) is None:
+            continue
         value = _decimal(fields.get(name))
         if value is None or (name != "funding_rate" and value <= 0):
             invalid.append(name)
