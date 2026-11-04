@@ -29,4 +29,9 @@ This branch contains a limited set of evidence-backed quantitative corrections. 
 
 ## Validation status
 
-A fresh GitHub Actions run is required against this branch's exact head. A prior run associated with the PR #5 head failed a report assertion; it is not evidence of the state of this branch. Public Binance integration tests remain opt-in and are not claimed as executed.
+GitHub Actions run [41810938426](https://github.com/bhuttasaifullah2-ui/binance-quant-arbitrage/actions/runs/41810938426) passed on commit `ea74f3fa50545e6aa9990d4c3d392f86ec1bc289`:
+
+- Python 3.12: Ruff passed, compile passed, **77 passed, 2 skipped**.
+- Python 3.13: Ruff passed, compile passed, **77 passed, 2 skipped**.
+
+The two skipped tests are opt-in public Binance integration tests. They were not run; no live connectivity is claimed.
