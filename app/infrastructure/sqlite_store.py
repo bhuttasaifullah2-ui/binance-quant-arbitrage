@@ -81,8 +81,11 @@ class SQLiteMarketStore:
             if current_version < SCHEMA_VERSION or needs_rebuild:
                 backup_path = Path(f"{self.path}.pre_v4.bak")
                 if not backup_path.exists():
-                    with sqlite3.connect(backup_path) as backup:
+                    backup = sqlite3.connect(backup_path)
+                    try:
                         conn.backup(backup)
+                    finally:
+                        backup.close()
                 columns = {item["name"] for item in conn.execute(
                     "PRAGMA table_info(funding_observations)").fetchall()}
                 mark_expr = "settlement_mark_price" if "settlement_mark_price" in columns else "NULL"
@@ -118,8 +121,13 @@ class SQLiteMarketStore:
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.resolve() == self.path.resolve():
             raise ValueError("backup destination must differ from the active database")
-        with self._connect() as source, sqlite3.connect(destination) as target:
+        source = self._connect()
+        target = sqlite3.connect(destination)
+        try:
             source.backup(target)
+        finally:
+            target.close()
+            source.close()
         return str(destination)
 
     @staticmethod
@@ -128,13 +136,19 @@ class SQLiteMarketStore:
         source_path, destination = Path(backup_path), Path(database_path)
         if source_path.resolve() == destination.resolve():
             raise ValueError("backup and restore paths must differ")
-        with sqlite3.connect(source_path) as source:
+        source = sqlite3.connect(source_path)
+        try:
             integrity = source.execute("PRAGMA integrity_check").fetchone()
             if integrity is None or integrity[0] != "ok":
                 raise sqlite3.DatabaseError("backup failed SQLite integrity_check")
             destination.parent.mkdir(parents=True, exist_ok=True)
-            with sqlite3.connect(destination) as target:
+            target = sqlite3.connect(destination)
+            try:
                 source.backup(target)
+            finally:
+                target.close()
+        finally:
+            source.close()
         return SQLiteMarketStore(str(destination))
 
     def save_observation(self, row: dict[str, Any]) -> bool:
