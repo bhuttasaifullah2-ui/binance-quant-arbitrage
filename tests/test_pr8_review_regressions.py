@@ -332,3 +332,15 @@ def test_special_event_is_not_in_regular_funding_rate_statistics():
     stats = summarize_funding(observations)
     assert stats["count"] == 2
     assert stats["mean"] == Decimal("0.00015")
+
+
+def test_funding_budget_uses_sliding_not_fixed_window():
+    budget = FundingRequestBudget(limit=3, reserve_for_current=1, window_seconds=300)
+    budget.try_acquire("backfill", now=0)
+    budget.try_acquire("backfill", now=100)
+    with pytest.raises(RuntimeError, match="budget"):
+        budget.try_acquire("backfill", now=299)
+    budget.try_acquire("current", now=299)
+    with pytest.raises(RuntimeError, match="budget"):
+        budget.try_acquire("current", now=299)
+    assert budget.try_acquire("backfill", now=301)
