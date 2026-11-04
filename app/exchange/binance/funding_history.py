@@ -1,5 +1,6 @@
 """Bounded, overlap-safe pagination for public USD-M funding settlements."""
 from typing import Any
+import inspect
 from app.exchange.binance.public_client import BinancePublicClient
 
 
@@ -22,11 +23,16 @@ async def fetch_funding_history_with_stats(client: BinancePublicClient, symbol: 
     duplicates = 0
     previous_latest: int | None = None
     for _ in range(max_pages):
-        acquire = getattr(client, "acquire_funding_request", None)
-        if acquire is not None:
-            await acquire(priority)
-        page = await client.futures_funding_history(symbol, page_size, start_time_ms=cursor,
-                                                    end_time_ms=end_time_ms)
+        request = client.futures_funding_history
+        if "priority" in inspect.signature(request).parameters:
+            page = await request(symbol, page_size, start_time_ms=cursor,
+                                 end_time_ms=end_time_ms, priority=priority)
+        else:
+            acquire = getattr(client, "acquire_funding_request", None)
+            if acquire is not None:
+                await acquire(priority)
+            page = await request(symbol, page_size, start_time_ms=cursor,
+                                 end_time_ms=end_time_ms)
         if not page:
             break
         valid = [x for x in page if "fundingTime" in x and "fundingRate" in x]
