@@ -27,14 +27,14 @@ def test_v3_funding_migration_preserves_legacy_record_and_creates_backup(tmp_pat
     assert history[0]["rate_type"] is None
     assert history[0]["source"] == "legacy"
     with sqlite3.connect(database) as conn:
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 4
-    backup = next(tmp_path.glob("no-version.sqlite.pre_v4.*.bak"))
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 5
+    backup = next(tmp_path.glob("no-version.sqlite.pre_v5.*.bak"))
     restored = SQLiteMarketStore.restore_from_backup(
         str(backup), str(tmp_path / "restored-legacy-no-version.sqlite")
     )
     assert restored.funding_history("SOLUSDT")[0]["funding_rate"] == "0.0003"
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    backup = next(tmp_path.glob("legacy.sqlite3.pre_v4.*.bak"))
+    backup = next(tmp_path.glob("legacy.sqlite3.pre_v5.*.bak"))
     assert backup.exists()
     restored = SQLiteMarketStore.restore_from_backup(
         str(backup), str(tmp_path / "restored-from-pre-v4.sqlite3")
@@ -51,12 +51,12 @@ def test_exact_duplicates_are_ignored_but_mark_and_rate_type_conflicts_are_retai
     changed_source = {**regular, "source": "binance_fapi_fundingRate_backfill"}
     assert store.save_funding_observations("BTCUSDT", [regular], 1700000001000) == 1
     assert store.save_funding_observations("BTCUSDT", [regular], 1700000002000) == 0
-    assert store.save_funding_observations("BTCUSDT", [special, changed_mark, changed_source], 1700000003000) == 3
+    assert store.save_funding_observations("BTCUSDT", [special, changed_mark, changed_source], 1700000003000) == 2
     rows = store.funding_history("BTCUSDT")
-    assert len(rows) == 4
+    assert len(rows) == 3
     assert {row["rate_type"] for row in rows} == {"Regular", "Special"}
     assert {row["settlement_mark_price"] for row in rows} == {"50000", "50001"}
-    assert {row["source"] for row in rows} == {
+    assert {source for row in rows for source in row["sources"]} == {
         "binance_fapi_fundingRate", "binance_fapi_fundingRate_backfill"
     }
     assert {row["observed_at_ms"] for row in rows} == {1700000001000, 1700000003000}
