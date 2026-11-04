@@ -650,6 +650,9 @@ class MarketScanner:
                             "funding_history_coverage_start_ms": funding_state.get("coverage_start_ms"),
                             "funding_history_coverage_end_ms": funding_state.get("coverage_end_ms"),
                             "funding_history_settlement_count": funding_state.get("settlement_count"),
+                            "funding_history_special_event_count": funding_state.get("special_event_count", 0),
+                            "funding_history_special_settlement_timestamps_ms": funding_state.get(
+                                "special_settlement_timestamps_ms", []),
                             "funding_history_coverage_note": "BOUNDED_STORED_WINDOW; OLDER_HISTORY_NOT_ASSERTED",
                             "realized_settlement_cashflow_for_current_quantity_usdt": (
                                 str(historical_settlement_cashflow_for_short(
