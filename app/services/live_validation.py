@@ -234,7 +234,9 @@ class LiveValidationService:
         raw_current_time = None if item is None else item.get("time")
         clock_offset = self.hub.clock_offsets_ms.get("futures", 0) if self.hub is not None else 0
         current_source_time = None if raw_current_time is None else int(raw_current_time) - clock_offset
-        current_source_age_ms = (None if current_source_time is None
+        current_source_time_valid = (current_source_time is not None and
+                                      0 < current_source_time <= now + self.max_clock_drift_ms)
+        current_source_age_ms = (None if not current_source_time_valid
                                  else max(0, now - current_source_time))
         current_source_fresh = (current_source_age_ms is not None and
                                 current_source_age_ms <= self.max_message_age_ms)
@@ -258,6 +260,7 @@ class LiveValidationService:
             "latest_settlement_time_match": settlement_time_match,
             "current_premium_index_time_ms": current_source_time,
             "current_premium_index_age_ms": current_source_age_ms,
+            "current_premium_index_time_valid": current_source_time_valid,
             "current_premium_index_fresh": current_source_fresh,
             "resolved_gap_count": len(gaps) - len(unresolved),
             "unresolved_gaps": [{"previous_settlement_ms": a, "next_settlement_ms": b} for a, b in unresolved],
