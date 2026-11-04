@@ -133,6 +133,7 @@ class MarketScanner:
                     "futures_bid": fb.get("bidPrice"), "futures_ask": fb.get("askPrice"),
                     "futures_last": ft.get("lastPrice"), "futures_quote_volume": ft.get("quoteVolume"),
                     "futures_mark": pi.get("markPrice"), "futures_index": pi.get("indexPrice"),
+                    "futures_premium_time_ms": pi.get("time"),
                     "funding_rate": pi.get("lastFundingRate"),
                     "next_funding_time_ms": (int(pi["nextFundingTime"]) - self.market_hub.clock_offsets_ms.get("futures", 0)
                                              if pi.get("nextFundingTime") is not None else None)}, now, now)
@@ -159,6 +160,7 @@ class MarketScanner:
             fut_t[symbol] = {"lastPrice": snap["futures_last"], "quoteVolume": snap["futures_quote_volume"]}
             fut_b[symbol] = {"bidPrice": snap["futures_bid"], "askPrice": snap["futures_ask"]}
             prem[symbol] = {"markPrice": snap["futures_mark"], "indexPrice": snap["futures_index"],
+                            "time": snap.get("futures_premium_time_ms"),
                             "lastFundingRate": snap["funding_rate"],
                             "nextFundingTime": snap["next_funding_time_ms"]}
         return spot_t, spot_b, fut_t, fut_b, prem
