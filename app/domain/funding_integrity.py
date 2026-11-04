@@ -104,6 +104,9 @@ def assess_funding_history(
     if gaps:
         return {"state": HISTORY_INCOMPLETE, "missing_settlement_intervals": gaps,
                 "missing_intervals_are_not_zero": True}
+    if len(times) < 3:
+        return {"state": HISTORY_INCOMPLETE, "reason": "fewer than three distinct settlements; history coverage is insufficient",
+                "settlement_count": len(times), "missing_intervals_are_not_zero": True}
     if coverage_start_ms is not None and times[0] > coverage_start_ms + tolerance_ms:
         return {"state": HISTORY_INCOMPLETE, "coverage_start_ms": int(coverage_start_ms),
                 "earliest_settlement_ms": times[0], "missing_intervals_are_not_zero": True}
