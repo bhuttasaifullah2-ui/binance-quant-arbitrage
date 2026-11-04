@@ -72,7 +72,7 @@ def test_history_reconciles_timestamp_rate_and_settlement_mark():
 def test_conflicting_same_time_payloads_and_rate_mismatch_fail_closed():
     rows = _rows()
     next_time = rows[-1]["fundingTime"] + 8 * 3_600_000
-    conflict = rows + [{**rows[-1], "rateType": "Special"}]
+    conflict = rows + [{**rows[-1], "markPrice": "99999", "rateType": "Regular"}]
     assert assess_funding_history(conflict, interval_hours=8, next_funding_time_ms=next_time,
                                   current_funding_rate="0.0003")["state"] == HISTORY_RECONCILIATION_FAILED
     assert assess_funding_history(rows, interval_hours=8, next_funding_time_ms=next_time,
