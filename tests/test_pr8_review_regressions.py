@@ -321,3 +321,14 @@ def test_backup_destination_is_never_overwritten(tmp_path):
     with pytest.raises(FileExistsError):
         store.backup_to(str(destination))
     assert destination.read_bytes() == before
+
+
+def test_special_event_is_not_in_regular_funding_rate_statistics():
+    observations = [
+        FundingObservation("BTCUSDT", Decimal("0.0001"), BASE, None, "Regular"),
+        FundingObservation("BTCUSDT", Decimal("0.5"), BASE, None, "Special"),
+        FundingObservation("BTCUSDT", Decimal("0.0002"), BASE + 8 * HOUR, None, "Regular"),
+    ]
+    stats = summarize_funding(observations)
+    assert stats["count"] == 2
+    assert stats["mean"] == Decimal("0.00015")
