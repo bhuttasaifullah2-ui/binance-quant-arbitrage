@@ -115,7 +115,7 @@ def test_public_funding_info_failure_can_recover_without_credentials():
             self.calls = 0
             self.paths = []
 
-        async def _get(self, market, path, params=None):
+        async def _get(self, market, path, params=None, funding_priority="current"):
             self.calls += 1
             self.paths.append((market, path))
             if self.calls == 1:
