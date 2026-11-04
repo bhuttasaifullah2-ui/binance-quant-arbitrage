@@ -5,7 +5,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS market_observations (
@@ -20,8 +20,8 @@ CREATE INDEX IF NOT EXISTS idx_market_symbol_time ON market_observations(symbol,
 CREATE INDEX IF NOT EXISTS idx_market_time ON market_observations(observed_at_ms DESC);
 CREATE TABLE IF NOT EXISTS funding_observations (
  id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, funding_time_ms INTEGER NOT NULL,
- funding_rate TEXT NOT NULL, observed_at_ms INTEGER NOT NULL, source TEXT NOT NULL DEFAULT 'binance_rest',
- UNIQUE(symbol, funding_time_ms));
+ funding_rate TEXT NOT NULL, settlement_mark_price TEXT, rate_type TEXT,
+ observed_at_ms INTEGER NOT NULL, source TEXT NOT NULL DEFAULT 'binance_fapi_fundingRate');
 CREATE INDEX IF NOT EXISTS idx_funding_symbol_time ON funding_observations(symbol, funding_time_ms DESC);
 CREATE TABLE IF NOT EXISTS exchange_symbol_metadata (
  market TEXT NOT NULL, symbol TEXT NOT NULL, updated_at_ms INTEGER NOT NULL,
@@ -74,11 +74,82 @@ class SQLiteMarketStore:
         with self._connect() as conn:
             conn.executescript(SCHEMA)
             row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
-            if row is None:
+            columns = {item["name"] for item in conn.execute(
+                "PRAGMA table_info(funding_observations)").fetchall()}
+            current_version = 0 if row is None else int(row["version"])
+            needs_rebuild = "settlement_mark_price" not in columns or "rate_type" not in columns
+            if (row is not None and current_version < SCHEMA_VERSION) or needs_rebuild:
+                backup_path = Path(f"{self.path}.pre_v4.bak")
+                if not backup_path.exists():
+                    backup = sqlite3.connect(backup_path)
+                    try:
+                        conn.backup(backup)
+                    finally:
+                        backup.close()
+                columns = {item["name"] for item in conn.execute(
+                    "PRAGMA table_info(funding_observations)").fetchall()}
+                mark_expr = "settlement_mark_price" if "settlement_mark_price" in columns else "NULL"
+                type_expr = "rate_type" if "rate_type" in columns else "NULL"
+                source_expr = "source" if "source" in columns else "'legacy_unknown'"
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("""CREATE TABLE funding_observations_v4 (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL,
+                    funding_time_ms INTEGER NOT NULL, funding_rate TEXT NOT NULL,
+                    settlement_mark_price TEXT, rate_type TEXT, observed_at_ms INTEGER NOT NULL,
+                    source TEXT NOT NULL DEFAULT 'binance_fapi_fundingRate')""")
+                conn.execute(f"""INSERT INTO funding_observations_v4
+                    (id,symbol,funding_time_ms,funding_rate,settlement_mark_price,rate_type,
+                     observed_at_ms,source)
+                    SELECT id,symbol,funding_time_ms,funding_rate,{mark_expr},{type_expr},
+                           observed_at_ms,{source_expr} FROM funding_observations""")
+                conn.execute("DROP TABLE funding_observations")
+                conn.execute("ALTER TABLE funding_observations_v4 RENAME TO funding_observations")
+                conn.execute("""CREATE INDEX idx_funding_symbol_time
+                    ON funding_observations(symbol, funding_time_ms DESC)""")
+                conn.execute("DELETE FROM schema_version")
                 conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-            elif int(row["version"]) < SCHEMA_VERSION:
-                # Phase 2.1 changes are additive CREATE TABLE/INDEX operations above.
-                conn.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
+                conn.commit()
+            elif row is None:
+                conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+            conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_funding_event_payload
+                ON funding_observations(symbol, funding_time_ms, funding_rate,
+                    COALESCE(settlement_mark_price, ''), COALESCE(rate_type, ''), source)""")
+
+    def backup_to(self, destination_path: str) -> str:
+        """Create a consistent online SQLite backup, including committed WAL content."""
+        destination = Path(destination_path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.resolve() == self.path.resolve():
+            raise ValueError("backup destination must differ from the active database")
+        source = self._connect()
+        target = sqlite3.connect(destination)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
+        return str(destination)
+
+    @staticmethod
+    def restore_from_backup(backup_path: str, database_path: str) -> "SQLiteMarketStore":
+        """Validate and restore a backup, then apply any pending additive migration."""
+        source_path, destination = Path(backup_path), Path(database_path)
+        if source_path.resolve() == destination.resolve():
+            raise ValueError("backup and restore paths must differ")
+        source = sqlite3.connect(source_path)
+        try:
+            integrity = source.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                raise sqlite3.DatabaseError("backup failed SQLite integrity_check")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            target = sqlite3.connect(destination)
+            try:
+                source.backup(target)
+            finally:
+                target.close()
+        finally:
+            source.close()
+        return SQLiteMarketStore(str(destination))
 
     def save_observation(self, row: dict[str, Any]) -> bool:
         keys = ["symbol","observed_at_ms","spot_bid","spot_ask","spot_last","spot_quote_volume",
@@ -91,14 +162,23 @@ class SQLiteMarketStore:
             return cur.rowcount == 1
 
     def save_funding_observations(self, symbol: str, rows: list[dict[str, Any]], observed_at_ms: int) -> int:
+        """Save settlements; exact payload duplicates are idempotent, conflicts are retained."""
         inserted = 0
         with self._connect() as conn:
             for row in rows:
-                if "fundingTime" not in row or "fundingRate" not in row:
+                funding_time = row.get("fundingTime", row.get("funding_time_ms"))
+                funding_rate = row.get("fundingRate", row.get("funding_rate"))
+                if funding_time is None or funding_rate is None:
                     continue
+                mark = row.get("markPrice", row.get("settlement_mark_price"))
+                rate_type = row.get("rateType", row.get("rate_type"))
+                source = str(row.get("source") or "binance_fapi_fundingRate")
                 cur = conn.execute("""INSERT OR IGNORE INTO funding_observations
-                    (symbol,funding_time_ms,funding_rate,observed_at_ms,source) VALUES (?,?,?,?,?)""",
-                    (symbol.upper(), int(row["fundingTime"]), str(row["fundingRate"]), observed_at_ms, "binance_rest"))
+                    (symbol,funding_time_ms,funding_rate,settlement_mark_price,rate_type,
+                     observed_at_ms,source) VALUES (?,?,?,?,?,?,?)""",
+                    (symbol.upper(), int(funding_time), str(funding_rate),
+                     None if mark is None else str(mark),
+                     None if rate_type is None else str(rate_type), int(observed_at_ms), source))
                 inserted += cur.rowcount
         return inserted
 
@@ -208,9 +288,19 @@ class SQLiteMarketStore:
 
     def funding_history(self, symbol: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute("""SELECT symbol,funding_time_ms,funding_rate,observed_at_ms,source
-                FROM funding_observations WHERE symbol=? ORDER BY funding_time_ms DESC LIMIT ? OFFSET ?""",
+            rows = conn.execute("""SELECT symbol,funding_time_ms,funding_rate,settlement_mark_price,
+                rate_type,observed_at_ms,source FROM funding_observations WHERE symbol=?
+                ORDER BY funding_time_ms DESC,rate_type,settlement_mark_price LIMIT ? OFFSET ?""",
                 (symbol.upper(), limit, offset)).fetchall()
+        return [dict(row) for row in rows]
+
+    def funding_history_conflicts(self, symbol: str) -> list[dict[str, Any]]:
+        """Expose timestamps containing multiple distinct settlement payloads."""
+        with self._connect() as conn:
+            rows = conn.execute("""SELECT funding_time_ms,COUNT(*) AS record_count
+                FROM funding_observations WHERE symbol=? GROUP BY funding_time_ms
+                HAVING COUNT(*) > 1 ORDER BY funding_time_ms DESC""",
+                (symbol.upper(),)).fetchall()
         return [dict(row) for row in rows]
 
     def history(self, symbol: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
