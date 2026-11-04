@@ -34,3 +34,13 @@ def test_hedge_returns_actual_quantities_and_reasons():
     assert result["spot_quantity"] == D("0.016")
     assert result["futures_quantity"] == D("0.016")
     assert result["executable"]
+
+
+def test_hedge_rejects_same_ticker_with_incompatible_base_asset():
+    spot = SymbolFilters.from_exchange_info(_meta(), "spot")
+    futures_meta = _meta()
+    futures_meta["baseAsset"] = "WBTC"
+    futures = SymbolFilters.from_exchange_info(futures_meta, "futures")
+    result = matched_valid_hedge(D("1000"), D("60000"), D("60010"), spot, futures)
+    assert not result["executable"]
+    assert "Spot and Futures base assets do not match" in result["reasons"]
