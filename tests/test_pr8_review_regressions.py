@@ -379,3 +379,22 @@ async def test_full_page_without_pagination_progress_fails_closed():
         await fetch_funding_history_with_stats(
             RepeatingClient(), "BTCUSDT", page_size=2, max_pages=3
         )
+
+
+@pytest.mark.asyncio
+async def test_staggered_rest_endpoint_responses_get_independent_midpoints(monkeypatch):
+    from app.services import market_scanner
+
+    ticks = iter([1000, 1100, 1200, 1400])
+    monkeypatch.setattr(market_scanner.time, "time", lambda: next(ticks))
+
+    async def payload(value):
+        return value
+
+    spot, spot_midpoint = await market_scanner._timed_request(payload("spot"))
+    futures, futures_midpoint = await market_scanner._timed_request(payload("futures"))
+    assert spot == "spot"
+    assert futures == "futures"
+    assert spot_midpoint == 1050
+    assert futures_midpoint == 1300
+    assert abs(spot_midpoint - futures_midpoint) > 500
