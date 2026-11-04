@@ -6,7 +6,8 @@ from typing import Any
 
 from app.domain.exchange_filters import SymbolFilters, matched_valid_hedge
 from app.domain.funding import (summarize_funding, funding_history_gaps,
-                                linear_futures_funding_notional)
+                                linear_futures_funding_notional,
+                                historical_settlement_cashflow_for_short)
 from app.domain.funding_integrity import (
     FUNDING_RATE_RECONCILED, HISTORY_INCOMPLETE, HISTORY_MISSING, HISTORY_STALE,
     HISTORY_RECONCILIATION_FAILED, adjusted_rate_within_limits, assess_funding_history,
@@ -651,10 +652,11 @@ class MarketScanner:
                             "funding_history_settlement_count": funding_state.get("settlement_count"),
                             "funding_history_coverage_note": "BOUNDED_STORED_WINDOW; OLDER_HISTORY_NOT_ASSERTED",
                             "realized_settlement_cashflow_for_current_quantity_usdt": (
-                                str(linear_futures_funding_notional(
+                                str(historical_settlement_cashflow_for_short(
                                     hedge["futures_quantity"], futures_filter.contract_size,
-                                    _d(funding_state["settlement_mark_price"])) *
-                                    _d(funding_state["latest_settlement_rate"]))
+                                    None if funding_state.get("settlement_mark_price") is None
+                                    else _d(funding_state["settlement_mark_price"]),
+                                    _d(funding_state["latest_settlement_rate"])))
                                 if funding_state.get("settlement_mark_price") is not None else None),
                             "realized_settlement_cashflow_method": (
                                 "HISTORICAL_SETTLEMENT_MARK_FOR_HYPOTHETICAL_CURRENT_QUANTITY"
