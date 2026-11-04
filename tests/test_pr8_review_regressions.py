@@ -4,7 +4,6 @@ import sqlite3
 import pytest
 
 from app.domain.funding import (
-    deduplicate_funding_observations,
     funding_payment,
     linear_futures_funding_notional,
     summarize_funding,
@@ -15,10 +14,11 @@ from app.domain.funding_integrity import (
     HISTORY_RECONCILIATION_FAILED,
     assess_funding_history,
     snapshot_fields_are_acceptable,
+    deduplicate_economic_settlements,
 )
 from app.domain.models import FundingObservation
 from app.exchange.binance.funding_history import fetch_funding_history_with_stats
-from app.exchange.binance.public_client import FundingRequestBudget
+from app.exchange.binance.public_client import BinanceAPIError, BinancePublicClient, FundingRequestBudget
 from app.infrastructure.sqlite_store import SQLiteMarketStore
 
 
@@ -69,12 +69,12 @@ def test_source_only_duplicates_count_once_and_keep_provenance():
         {"fundingTime": BASE + 8 * HOUR, "fundingRate": "0.0002", "markPrice": "50100",
          "rateType": "Regular", "source": "primary"},
     ]
-    collapsed = deduplicate_funding_observations(rows)
+    collapsed = deduplicate_economic_settlements(rows)
     assert len(collapsed) == 2
     assert set(collapsed[0]["sources"]) == {"primary", "backfill"}
     observations = [FundingObservation("BTCUSDT", Decimal(row["fundingRate"]),
                                        int(row["fundingTime"])) for row in collapsed]
-    assert summarize_funding(observations)["count"] == 2
+    assert summarize_funding(observations + observations[:1])["count"] == 2
 
 
 @pytest.mark.asyncio
@@ -244,3 +244,27 @@ def test_cashflow_sign_multiplier_and_historical_mark():
     historical = linear_futures_funding_notional(Decimal("0.2"), Decimal("10"), Decimal("49000"))
     current = linear_futures_funding_notional(Decimal("0.2"), Decimal("10"), Decimal("50000"))
     assert historical != current
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [418, 429])
+async def test_rate_limit_applies_shared_cooldown_without_retry_storm(status):
+    import httpx
+
+    calls = {"count": 0}
+
+    async def handler(request):
+        calls["count"] += 1
+        return httpx.Response(status, headers={"Retry-After": "30"}, request=request)
+
+    client = BinancePublicClient("https://spot.invalid", "https://futures.invalid")
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        await client.acquire_funding_request("current")
+        with pytest.raises(BinanceAPIError, match="shared cooldown"):
+            await client._get("futures", "/fapi/v1/fundingRate")
+        with pytest.raises(BinanceAPIError, match="cooldown"):
+            await client.acquire_funding_request("current")
+        assert calls["count"] == 1
+    finally:
+        await client.close()
