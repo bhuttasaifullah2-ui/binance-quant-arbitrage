@@ -167,7 +167,23 @@ class LiveValidationService:
         from app.domain.models import FundingObservation
         observations = [FundingObservation(symbol, Decimal(str(x["fundingRate"])), int(x["fundingTime"]))
                         for x in ordered]
+        interval_metadata_available = False
         interval = detect_funding_interval_hours([x.funding_time_ms for x in observations])
+        interval_method = getattr(self.client, "futures_funding_info", None)
+        if interval_method is not None:
+            try:
+                interval_rows = await interval_method()
+                interval_metadata_available = True
+                override = next((row for row in interval_rows
+                                 if str(row.get("symbol", "")).upper() == symbol
+                                 and row.get("fundingIntervalHours") is not None), None)
+                if override is not None:
+                    candidate_interval = int(override["fundingIntervalHours"])
+                    if not 1 <= candidate_interval <= 24:
+                        raise ValueError("exchange returned an invalid funding interval")
+                    interval = candidate_interval
+            except Exception:
+                interval_metadata_available = False
         gaps = funding_history_gaps(observations, interval) if len(observations) > 1 else []
 
         # Bounded incremental backfill: each known gap is queried separately; unresolved
@@ -202,7 +218,15 @@ class LiveValidationService:
             mismatch = abs(Decimal(str(current_rate)) - Decimal(str(latest_realized))) > Decimal("0.00000001")
         next_time = None if item is None else item.get("nextFundingTime")
         next_time_valid = next_time is not None and int(next_time) > now
-        status = "HEALTHY" if item and ordered and not unresolved and not timestamp_errors and not mismatch and next_time_valid else "WARNING"
+        expected_latest_settlement = (None if next_time is None else
+                                      int(next_time) - interval * 3600000)
+        latest_settlement_time = None if not ordered else int(ordered[-1]["fundingTime"])
+        settlement_time_match = (expected_latest_settlement is not None and
+                                 latest_settlement_time is not None and
+                                 abs(latest_settlement_time - expected_latest_settlement) <= 60000)
+        status = ("HEALTHY" if item and ordered and interval_metadata_available and
+                  not unresolved and not timestamp_errors and not mismatch and
+                  settlement_time_match and next_time_valid else "WARNING")
         self.funding = {
             "symbol": symbol, "status": status, "checked_at_ms": now,
             "current_observed_rate": None if current_rate is None else str(current_rate),
@@ -212,6 +236,11 @@ class LiveValidationService:
             "historical_realized_count": len(ordered),
             "duplicate_interval_count": duplicate_count,
             "funding_interval_hours_estimate": interval,
+            "funding_interval_source": "BINANCE_FUNDING_INFO" if interval_metadata_available else "HISTORICAL_HEURISTIC_UNVERIFIED",
+            "funding_interval_metadata_available": interval_metadata_available,
+            "expected_latest_settlement_ms": expected_latest_settlement,
+            "latest_settlement_time_ms": latest_settlement_time,
+            "latest_settlement_time_match": settlement_time_match,
             "resolved_gap_count": len(gaps) - len(unresolved),
             "unresolved_gaps": [{"previous_settlement_ms": a, "next_settlement_ms": b} for a, b in unresolved],
             "timestamp_errors": timestamp_errors,
