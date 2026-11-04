@@ -186,7 +186,11 @@ class SQLiteMarketStore:
         destination = Path(destination_path)
         if destination.resolve() == self.path.resolve():
             raise ValueError("backup destination must differ from the active database")
-        return self._create_verified_backup(self._connect(), destination)
+        source = self._connect()
+        try:
+            return self._create_verified_backup(source, destination)
+        finally:
+            source.close()
 
     @staticmethod
     def restore_from_backup(backup_path: str, database_path: str) -> "SQLiteMarketStore":
