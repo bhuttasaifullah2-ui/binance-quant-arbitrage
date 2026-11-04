@@ -130,26 +130,40 @@ class MarketScanner:
         return self._spot_info, self._futures_info
 
     def _rest_seed(self, common: list[str], spot_t: dict[str, Any], spot_b: dict[str, Any],
-                   fut_t: dict[str, Any], fut_b: dict[str, Any], prem: dict[str, Any], now: int) -> None:
+                   fut_t: dict[str, Any], fut_b: dict[str, Any], prem: dict[str, Any], now: int,
+                   field_times: dict[str, int] | None = None) -> None:
         if self.market_hub is None:
             return
+        field_times = field_times or {}
         for symbol in common:
             st, sb, ft, fb, pi = (spot_t.get(symbol), spot_b.get(symbol), fut_t.get(symbol),
                                   fut_b.get(symbol), prem.get(symbol))
             if st and sb:
-                self.market_hub.apply_rest(symbol, "spot:rest", {
-                    "spot_bid": sb.get("bidPrice"), "spot_ask": sb.get("askPrice"),
+                book_time = field_times.get("spot_bid", now)
+                ticker_time = field_times.get("spot_last", now)
+                self.market_hub.apply_rest(symbol, "spot:rest:book", {
+                    "spot_bid": sb.get("bidPrice"), "spot_ask": sb.get("askPrice")},
+                    book_time, book_time)
+                self.market_hub.apply_rest(symbol, "spot:rest:ticker", {
                     "spot_last": st.get("lastPrice"), "spot_quote_volume": st.get("quoteVolume")},
-                    now, now)
+                    ticker_time, ticker_time)
             if ft and fb and pi:
-                self.market_hub.apply_rest(symbol, "futures:rest", {
-                    "futures_bid": fb.get("bidPrice"), "futures_ask": fb.get("askPrice"),
-                    "futures_last": ft.get("lastPrice"), "futures_quote_volume": ft.get("quoteVolume"),
+                book_time = field_times.get("futures_bid", now)
+                ticker_time = field_times.get("futures_last", now)
+                premium_time = field_times.get("futures_mark", now)
+                self.market_hub.apply_rest(symbol, "futures:rest:book", {
+                    "futures_bid": fb.get("bidPrice"), "futures_ask": fb.get("askPrice")},
+                    book_time, book_time)
+                self.market_hub.apply_rest(symbol, "futures:rest:ticker", {
+                    "futures_last": ft.get("lastPrice"), "futures_quote_volume": ft.get("quoteVolume")},
+                    ticker_time, ticker_time)
+                self.market_hub.apply_rest(symbol, "futures:rest:premium", {
                     "futures_mark": pi.get("markPrice"), "futures_index": pi.get("indexPrice"),
                     "futures_premium_time_ms": pi.get("time"),
                     "funding_rate": pi.get("lastFundingRate"),
                     "next_funding_time_ms": (int(pi["nextFundingTime"]) - self.market_hub.clock_offsets_ms.get("futures", 0)
-                                             if pi.get("nextFundingTime") is not None else None)}, now, now)
+                                             if pi.get("nextFundingTime") is not None else None)},
+                    premium_time, premium_time)
 
     def _hub_maps(self, common: list[str], now: int) -> tuple[dict, dict, dict, dict, dict]:
         spot_t: dict[str, Any] = {}; spot_b: dict[str, Any] = {}
@@ -278,7 +292,7 @@ class MarketScanner:
                     fut_t = {x["symbol"]: x for x in fut_tickers if x.get("symbol") in common}
                     fut_b = {x["symbol"]: x for x in fut_books if x.get("symbol") in common}
                     prem = {x["symbol"]: x for x in premium if x.get("symbol") in common}
-                    self._rest_seed(common, spot_t, spot_b, fut_t, fut_b, prem, rest_started)
+                    self._rest_seed(common, spot_t, spot_b, fut_t, fut_b, prem, rest_started, rest_field_times)
                     if self.config.websocket_enabled and self.market_hub:
                         self._ws_bootstrap_done = True
                 prelim = []
