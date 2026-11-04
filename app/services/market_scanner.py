@@ -5,7 +5,8 @@ from decimal import Decimal
 from typing import Any
 
 from app.domain.exchange_filters import SymbolFilters, matched_valid_hedge
-from app.domain.funding import summarize_funding, detect_funding_interval_hours, funding_history_gaps
+from app.domain.funding import (summarize_funding, detect_funding_interval_hours,
+                                funding_history_gaps, linear_futures_funding_notional)
 from app.domain.market_quality import basis_bps, spread_bps
 from app.domain.models import FundingObservation
 from app.domain.scanner_eligibility import validate_scanner_eligibility
@@ -302,7 +303,8 @@ class MarketScanner:
                         hedge["mismatch_fraction"] = actual_mismatch
                         slips = [x.slippage_bps for x in executions if x is not None]
                         matched_notional = min(spot_entry_notional, futures_entry_notional)
-                        funding_notional = hedge["futures_quantity"] * futures_filter.contract_size * mark
+                        funding_notional = linear_futures_funding_notional(
+                            hedge["futures_quantity"], futures_filter.contract_size, mark)
                         gross_funding = funding_notional * funding
                         entry_fees = (spot_entry_notional * _d(self.config.spot_taker_fee_rate)
                                       + futures_entry_notional * _d(self.config.futures_taker_fee_rate))
