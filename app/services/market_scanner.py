@@ -328,7 +328,7 @@ class MarketScanner:
                                 return []
                             latest = self.store.latest_funding_time(symbol)
                             rows = await fetch_funding_history(
-                                self.client, symbol, start_time_ms=None if latest is None else latest + 1,
+                                self.client, symbol, start_time_ms=latest,
                                 page_size=min(self.config.history_limit, 1000),
                                 max_pages=self.config.funding_history_max_pages, priority="current")
                             existing = self.store.funding_history(symbol, self.config.history_limit)
