@@ -4,7 +4,7 @@
 
 The scanner uses only unauthenticated USDⓈ-M market-data endpoints:
 
-- `GET /fapi/v1/fundingInfo` for symbol-specific adjusted funding intervals and adjusted rate cap/floor.
+- `GET /fapi/v1/fundingInfo` for symbol-specific adjusted funding intervals and adjusted rate cap/floor. Binance documents zero request weight for this endpoint, but it shares the 500-requests-per-5-minute-per-IP limit with `GET /fapi/v1/fundingRate`; history pagination therefore remains bounded by the scanner's configured symbol/page budget.
 - `GET /fapi/v1/fundingRate` for realized settlement timestamp, rate, settlement mark price and rate type.
 - `GET /fapi/v1/premiumIndex` for the latest funding-rate observation, next settlement time and current mark-price proxy.
 
