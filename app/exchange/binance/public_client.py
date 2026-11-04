@@ -1,13 +1,47 @@
 import asyncio
 import logging
+import time
 from typing import Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
 
+
 class BinanceAPIError(RuntimeError):
     """Raised when Binance returns an unusable response after retries."""
+
+
+class FundingRequestBudget:
+    """Shared rolling-window request budget for fundingInfo and fundingRate."""
+
+    def __init__(self, limit: int = 450, reserve_for_current: int = 50,
+                 window_seconds: int = 300) -> None:
+        if limit < 1 or not 0 <= reserve_for_current < limit or window_seconds < 1:
+            raise ValueError("invalid funding request budget")
+        self.limit = limit
+        self.reserve_for_current = reserve_for_current
+        self.window_seconds = window_seconds
+        self._window_start: float | None = None
+        self._total = 0
+        self._backfill = 0
+
+    def try_acquire(self, priority: str = "current", *, now: float | None = None) -> bool:
+        if priority not in {"current", "backfill"}:
+            raise ValueError("priority must be current or backfill")
+        current = time.monotonic() if now is None else now
+        if self._window_start is None or current - self._window_start >= self.window_seconds:
+            self._window_start = current
+            self._total = 0
+            self._backfill = 0
+        backfill_limit = self.limit - self.reserve_for_current
+        if self._total >= self.limit or (priority == "backfill" and self._backfill >= backfill_limit):
+            raise RuntimeError("funding request budget exhausted; retry on a later scan")
+        self._total += 1
+        if priority == "backfill":
+            self._backfill += 1
+        return True
+
 
 class BinancePublicClient:
     """Unauthenticated REST client for public Spot and USDⓈ-M Futures data only."""
@@ -20,6 +54,8 @@ class BinancePublicClient:
         max_retries: int = 4,
         retry_base_seconds: float = 0.4,
         max_concurrent_requests: int = 8,
+        funding_request_limit: int = 450,
+        funding_current_reserve: int = 50,
     ) -> None:
         self.spot_base_url = spot_base_url.rstrip("/")
         self.futures_base_url = futures_base_url.rstrip("/")
@@ -28,6 +64,10 @@ class BinancePublicClient:
         self.retry_base_seconds = retry_base_seconds
         self._semaphore = asyncio.Semaphore(max_concurrent_requests)
         self._client: httpx.AsyncClient | None = None
+        self.funding_request_budget = FundingRequestBudget(
+            funding_request_limit, funding_current_reserve, 300
+        )
+        self._funding_cooldown_until = 0.0
 
     async def __aenter__(self) -> "BinancePublicClient":
         self._client = httpx.AsyncClient(
@@ -44,6 +84,12 @@ class BinancePublicClient:
             await self._client.aclose()
             self._client = None
 
+    async def acquire_funding_request(self, priority: str = "current") -> None:
+        now = time.monotonic()
+        if now < self._funding_cooldown_until:
+            raise BinanceAPIError("funding endpoints in shared cooldown after Binance rate limit")
+        self.funding_request_budget.try_acquire(priority)
+
     async def _get(self, market: str, path: str, params: dict[str, Any] | None = None) -> Any:
         base = self.spot_base_url if market == "spot" else self.futures_base_url
         if self._client is None:
@@ -52,12 +98,21 @@ class BinancePublicClient:
                 headers={"User-Agent": "binance-quant-arbitrage/0.2 read-only"},
             )
         url = f"{base}{path}"
+        is_funding_endpoint = path in {"/fapi/v1/fundingInfo", "/fapi/v1/fundingRate"}
         async with self._semaphore:
             for attempt in range(self.max_retries + 1):
                 try:
                     response = await self._client.get(url, params=params)
                     if response.status_code in (418, 429):
-                        retry_after = float(response.headers.get("Retry-After", "1"))
+                        retry_after = float(response.headers.get("Retry-After", "60" if response.status_code == 418 else "1"))
+                        if is_funding_endpoint:
+                            self._funding_cooldown_until = max(
+                                self._funding_cooldown_until,
+                                time.monotonic() + max(1.0, retry_after),
+                            )
+                            raise BinanceAPIError(
+                                f"Binance funding rate limit {response.status_code}; shared cooldown applied"
+                            )
                         if attempt >= self.max_retries:
                             raise BinanceAPIError(
                                 f"Binance rate limit response {response.status_code} for {path}"
@@ -110,6 +165,7 @@ class BinancePublicClient:
         return await self._get("futures", "/fapi/v1/premiumIndex")
 
     async def futures_funding_info(self) -> list[dict[str, Any]]:
+        await self.acquire_funding_request("current")
         return await self._get("futures", "/fapi/v1/fundingInfo")
 
     async def futures_funding_history(self, symbol: str, limit: int = 100,
