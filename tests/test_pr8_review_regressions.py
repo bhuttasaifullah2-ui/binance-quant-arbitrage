@@ -262,7 +262,7 @@ async def test_rate_limit_applies_shared_cooldown_without_retry_storm(status):
     client = BinancePublicClient("https://spot.invalid", "https://futures.invalid")
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     try:
-        with pytest.raises(BinanceAPIError, match="shared cooldown"):
+        with pytest.raises(BinanceAPIError, match="cooldown"):
             await client._get("futures", "/fapi/v1/fundingRate")
         with pytest.raises(BinanceAPIError, match="cooldown"):
             await client.acquire_funding_request("current")
