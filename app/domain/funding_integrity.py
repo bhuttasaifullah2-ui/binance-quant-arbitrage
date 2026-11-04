@@ -73,9 +73,11 @@ def deduplicate_economic_settlements(rows: list[dict[str, Any]]) -> list[dict[st
             grouped[key] = dict(row)
             grouped[key]["sources"] = []
         sources = grouped[key]["sources"]
-        source = str(row.get("source") or "binance_fapi_fundingRate")
-        if source not in sources:
-            sources.append(source)
+        source_values = row.get("sources") or [row.get("source")]
+        for source_value in source_values:
+            source = str(source_value or "binance_fapi_fundingRate")
+            if source not in sources:
+                sources.append(source)
     return [grouped[key] for key in sorted(grouped, key=lambda x: (x[0], x[3], x[1], x[2]))]
 
 
