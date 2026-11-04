@@ -4,6 +4,7 @@ from app.domain.exchange_filters import SymbolFilters, matched_valid_hedge
 
 def _meta(symbol="BTCUSDT", market=True):
     return {"symbol": symbol, "status": "TRADING", "baseAsset": "BTC", "quoteAsset": "USDT",
+            "marginAsset": "USDT", "contractType": "PERPETUAL",
             "filters": [
                 {"filterType": "PRICE_FILTER", "minPrice": "0.01", "maxPrice": "1000000", "tickSize": "0.01"},
                 {"filterType": "LOT_SIZE", "minQty": "0.001", "maxQty": "100", "stepSize": "0.001"},
@@ -34,3 +35,23 @@ def test_hedge_returns_actual_quantities_and_reasons():
     assert result["spot_quantity"] == D("0.016")
     assert result["futures_quantity"] == D("0.016")
     assert result["executable"]
+
+
+def test_hedge_rejects_same_ticker_with_incompatible_base_asset():
+    spot = SymbolFilters.from_exchange_info(_meta(), "spot")
+    futures_meta = _meta()
+    futures_meta["baseAsset"] = "WBTC"
+    futures = SymbolFilters.from_exchange_info(futures_meta, "futures")
+    result = matched_valid_hedge(D("1000"), D("60000"), D("60010"), spot, futures)
+    assert not result["executable"]
+    assert "Spot and Futures base assets do not match" in result["reasons"]
+
+
+def test_hedge_rejects_missing_usdm_margin_asset_metadata():
+    spot = SymbolFilters.from_exchange_info(_meta(), "spot")
+    futures_meta = _meta()
+    futures_meta.pop("marginAsset")
+    futures = SymbolFilters.from_exchange_info(futures_meta, "futures")
+    result = matched_valid_hedge(D("1000"), D("60000"), D("60010"), spot, futures)
+    assert not result["executable"]
+    assert "USD-M Futures margin asset does not match the hedge quote asset" in result["reasons"]

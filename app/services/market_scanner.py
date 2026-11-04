@@ -5,12 +5,14 @@ from decimal import Decimal
 from typing import Any
 
 from app.domain.exchange_filters import SymbolFilters, matched_valid_hedge
-from app.domain.funding import summarize_funding, detect_funding_interval_hours, funding_history_gaps
+from app.domain.funding import (summarize_funding, detect_funding_interval_hours,
+                                funding_history_gaps, linear_futures_funding_notional)
 from app.domain.market_quality import basis_bps, spread_bps
 from app.domain.models import FundingObservation
 from app.domain.scanner_eligibility import validate_scanner_eligibility
 from app.domain.orderbook import estimate_vwap, estimate_vwap_quantity
 from app.domain.ranking import score_opportunity_breakdown, RankingWeights
+from app.domain.profitability import estimate_round_trip_spread_cost
 from app.exchange.binance.funding_history import fetch_funding_history
 from app.exchange.binance.public_client import BinancePublicClient
 from app.infrastructure.sqlite_store import SQLiteMarketStore
@@ -85,7 +87,16 @@ class MarketScanner:
             elif "depth" in text or "volume" in text or "liquidity" in text:
                 code = "ORDERBOOK_LIQUIDITY_INSUFFICIENT"
             elif "funding" in text:
-                code = "FUNDING_HISTORY_INCONSISTENT"
+                if "gap" in text or "incomplete" in text:
+                    code = "FUNDING_HISTORY_INCOMPLETE"
+                elif "stale" in text or "expired" in text:
+                    code = "FUNDING_HISTORY_STALE"
+                elif "missing" in text or "absent" in text:
+                    code = "FUNDING_HISTORY_MISSING"
+                elif "reconcil" in text or "mismatch" in text:
+                    code = "FUNDING_RECONCILIATION_FAILED"
+                else:
+                    code = "FUNDING_DATA_REJECTED"
             elif "hedge" in text or "filter" in text:
                 code = "HEDGE_FILTER_VALIDATION_FAILED"
         item = {"symbol": symbol, "reason": reason, "explanation": reason,
@@ -122,6 +133,7 @@ class MarketScanner:
                     "futures_bid": fb.get("bidPrice"), "futures_ask": fb.get("askPrice"),
                     "futures_last": ft.get("lastPrice"), "futures_quote_volume": ft.get("quoteVolume"),
                     "futures_mark": pi.get("markPrice"), "futures_index": pi.get("indexPrice"),
+                    "futures_premium_time_ms": pi.get("time"),
                     "funding_rate": pi.get("lastFundingRate"),
                     "next_funding_time_ms": (int(pi["nextFundingTime"]) - self.market_hub.clock_offsets_ms.get("futures", 0)
                                              if pi.get("nextFundingTime") is not None else None)}, now, now)
@@ -148,6 +160,7 @@ class MarketScanner:
             fut_t[symbol] = {"lastPrice": snap["futures_last"], "quoteVolume": snap["futures_quote_volume"]}
             fut_b[symbol] = {"bidPrice": snap["futures_bid"], "askPrice": snap["futures_ask"]}
             prem[symbol] = {"markPrice": snap["futures_mark"], "indexPrice": snap["futures_index"],
+                            "time": snap.get("futures_premium_time_ms"),
                             "lastFundingRate": snap["funding_rate"],
                             "nextFundingTime": snap["next_funding_time_ms"]}
         return spot_t, spot_b, fut_t, fut_b, prem
@@ -159,6 +172,18 @@ class MarketScanner:
             self._eligibility_decisions = {}
             try:
                 spot_info, fut_info = await self._metadata(started)
+                # This public endpoint lists symbols whose USD-M funding interval
+                # differs from the documented default schedule.
+                funding_info_rows = await self.client.futures_funding_info()
+                funding_interval_overrides: dict[str, int] = {}
+                for info in funding_info_rows:
+                    symbol_key = str(info.get("symbol", "")).upper()
+                    if not symbol_key or info.get("fundingIntervalHours") is None:
+                        continue
+                    interval_hours = int(info["fundingIntervalHours"])
+                    if not 1 <= interval_hours <= 24:
+                        raise ValueError(f"Invalid exchange funding interval for {symbol_key}")
+                    funding_interval_overrides[symbol_key] = interval_hours
                 spot_symbols, fut_symbols = _eligible_spot(spot_info), _eligible_futures(fut_info)
                 common = sorted(spot_symbols & fut_symbols)
                 self.last_pair_count = len(common)
@@ -223,7 +248,8 @@ class MarketScanner:
                             existing_obs = [FundingObservation(symbol, _d(x["funding_rate"]), int(x["funding_time_ms"]))
                                             for x in existing]
                             if existing_obs:
-                                interval = detect_funding_interval_hours([x.funding_time_ms for x in existing_obs])
+                                interval = funding_interval_overrides.get(
+                                    symbol, detect_funding_interval_hours([x.funding_time_ms for x in existing_obs]))
                                 gaps = funding_history_gaps(existing_obs, interval)
                                 if gaps:
                                     gap_start, gap_end = gaps[0]
@@ -292,13 +318,19 @@ class MarketScanner:
                         hedge["mismatch_fraction"] = actual_mismatch
                         slips = [x.slippage_bps for x in executions if x is not None]
                         matched_notional = min(spot_entry_notional, futures_entry_notional)
-                        gross_funding = matched_notional * funding
+                        funding_notional = linear_futures_funding_notional(
+                            hedge["futures_quantity"], futures_filter.contract_size, mark)
+                        gross_funding = funding_notional * funding
                         entry_fees = (spot_entry_notional * _d(self.config.spot_taker_fee_rate)
                                       + futures_entry_notional * _d(self.config.futures_taker_fee_rate))
                         exit_fees = (spot_exit_notional * _d(self.config.spot_taker_fee_rate)
                                      + futures_exit_notional * _d(self.config.futures_taker_fee_rate))
                         slippage_cost = sum((x.quote_notional * x.slippage_bps / Decimal("10000")
                                              for x in executions if x is not None), Decimal("0"))
+                        spread_cost = estimate_round_trip_spread_cost(
+                            ss, fs, spot_entry_notional, spot_exit_notional,
+                            futures_entry_notional, futures_exit_notional)
+                        execution_cost = spread_cost + slippage_cost
                         if new_history:
                             self.store.save_funding_observations(symbol, new_history, now)
                         funding_obs = []
@@ -308,20 +340,20 @@ class MarketScanner:
                             if rate is not None and stamp is not None:
                                 funding_obs.append(FundingObservation(symbol, _d(rate), int(stamp)))
                         stats = summarize_funding(funding_obs)
-                        funding_interval = detect_funding_interval_hours([x.funding_time_ms for x in funding_obs])
+                        funding_interval = funding_interval_overrides.get(
+                            symbol, detect_funding_interval_hours([x.funding_time_ms for x in funding_obs]))
                         history_gaps = funding_history_gaps(funding_obs, funding_interval)
                         latest_history = max(funding_obs, key=lambda x: x.funding_time_ms) if funding_obs else None
+                        expected_previous_settlement_ms = next_funding - funding_interval * 3600000
+                        history_stale = (latest_history is None or
+                            latest_history.funding_time_ms < expected_previous_settlement_ms - 60000)
+                        settlement_time_mismatch = (latest_history is not None and
+                            latest_history.funding_time_ms > expected_previous_settlement_ms + 60000)
                         funding_consistent = (latest_history is not None and
                             abs(funding-latest_history.funding_rate) <= _d(getattr(self.config, "funding_reconciliation_tolerance", "0.00000001")))
-                        if history_gaps:
-                            self._reject(symbol, f"historical funding gaps detected:{len(history_gaps)}", now,
-                                         "FUNDING_HISTORY_INCONSISTENT")
-                        if not funding_consistent:
-                            self._reject(symbol, "current observed funding does not reconcile with latest realized settlement",
-                                         now, "FUNDING_HISTORY_INCONSISTENT")
                         bps = basis_bps(spot_buy.vwap, fut_sell.vwap)
                         basis_penalty = abs(bps)/Decimal("10000")*matched_notional*_d(self.config.basis_risk_haircut)
-                        net = gross_funding - entry_fees - exit_fees - slippage_cost - basis_penalty
+                        net = gross_funding - entry_fees - exit_fees - execution_cost - basis_penalty
                         age_ms = 0
                         data_source = "binance_rest"
                         if self.config.websocket_enabled and self.market_hub:
@@ -367,8 +399,18 @@ class MarketScanner:
                             residual_exposure_usdt=hedge["residual_directional_exposure"],
                             max_residual_exposure_usdt=matched_notional*_d(self.config.max_hedge_mismatch))
                         score = score_factors["score"]
-                        if next_funding <= now or stats["count"] == 0 or net <= _d(self.config.min_net_edge_usdt):
-                            self._reject(symbol, "funding history absent/expired or estimated net edge below threshold", now); continue
+                        if next_funding <= now:
+                            self._reject(symbol, "next funding timestamp is expired", now, "FUNDING_TIMESTAMP_INVALID"); continue
+                        if stats["count"] == 0:
+                            self._reject(symbol, "funding history missing realized settlements", now, "FUNDING_HISTORY_MISSING"); continue
+                        if history_stale:
+                            self._reject(symbol, "funding history stale relative to expected previous settlement", now, "FUNDING_HISTORY_STALE"); continue
+                        if settlement_time_mismatch:
+                            self._reject(symbol, "latest funding settlement timestamp does not align with expected schedule",
+                                         now, "FUNDING_SETTLEMENT_TIME_MISMATCH")
+                            continue
+                        if net <= _d(self.config.min_net_edge_usdt):
+                            self._reject(symbol, "estimated net edge does not exceed configured minimum", now, "NET_EDGE_INSUFFICIENT"); continue
                         # All candidate opportunities pass this one final, shared gate.
                         state = self.market_hub.states.get(symbol) if self.market_hub else None
                         required_fields = ("spot_bid", "spot_ask", "spot_last", "spot_quote_volume",
@@ -378,10 +420,30 @@ class MarketScanner:
                             quality = state.freshness(now, self.config.max_data_age_seconds*1000, required_fields)
                             field_ages = quality["ages_ms"]
                             funding_field = state.fields.get("funding_rate")
-                            funding_age = None if funding_field is None else max(0, now-funding_field.received_at_ms)
+                            if funding_field is None:
+                                funding_source_time_ms = None
+                            elif funding_field.source == "websocket":
+                                funding_source_time_ms = int(funding_field.event_time_ms)
+                            else:
+                                raw_funding_time = pi.get("time")
+                                funding_source_time_ms = (None if raw_funding_time is None else
+                                    int(raw_funding_time) -
+                                    (self.market_hub.clock_offsets_ms.get("futures", 0)
+                                     if self.market_hub else 0))
+                            if funding_source_time_ms is not None and not (
+                                    0 < funding_source_time_ms <= now + getattr(self.config, "max_clock_skew_ms", 5000)):
+                                funding_source_time_ms = None
+                            funding_age = (None if funding_source_time_ms is None
+                                           else max(0, now-funding_source_time_ms))
                         else:
                             field_ages = {name: max(0, now-(rest_snapshot_ms or now)) for name in required_fields}
-                            funding_age = max(0, now-(rest_snapshot_ms or now))
+                            raw_funding_time = pi.get("time")
+                            funding_source_time_ms = (None if raw_funding_time is None else
+                                int(raw_funding_time) -
+                                (self.market_hub.clock_offsets_ms.get("futures", 0)
+                                 if self.market_hub else 0))
+                            funding_age = (None if funding_source_time_ms is None
+                                           else max(0, now-funding_source_time_ms))
                             quality = {"valid": bool(rest_snapshot_ms), "reasons": [] if rest_snapshot_ms else ["missing REST snapshot"]}
                         ws_feeds = {}
                         if self.config.websocket_enabled:
@@ -422,6 +484,9 @@ class MarketScanner:
                             "max_clock_sync_age_ms": int(getattr(self.config, "max_clock_sync_age_seconds", 300))*1000,
                             "spot_filters_valid": spot_filter_ok, "futures_filters_valid": futures_filter_ok,
                             "funding_age_ms": funding_age, "max_funding_age_ms": self.config.max_data_age_seconds*1000,
+                            "funding_history_missing": not funding_obs,
+                            "funding_history_stale": history_stale,
+                            "funding_settlement_time_mismatch": settlement_time_mismatch,
                             "funding_gaps": history_gaps, "funding_inconsistent": not funding_consistent,
                             "hedge_valid": bool(hedge.get("executable")) and not actual_validation,
                             "residual_exposure_usdt": hedge.get("residual_directional_exposure"),
@@ -448,9 +513,13 @@ class MarketScanner:
                                "futures_slippage_bps": fut_sell.slippage_bps + fut_buy.slippage_bps,
                                "basis_bps": bps, "observed_at_ms": now, "source": data_source}
                         self.store.save_observation(row)
-                        break_even = (entry_fees + exit_fees + slippage_cost + basis_penalty) / matched_notional
+                        break_even = (entry_fees + exit_fees + execution_cost + basis_penalty) / matched_notional
                         out.append({
                             "symbol": symbol, "score": str(score), "funding_rate": str(funding),
+                            "funding_rate_assumption": "LATEST_REALIZED_RATE_CARRIED_FORWARD_NOT_A_FORECAST",
+                            "funding_source_time_ms": funding_source_time_ms,
+                            "funding_notional_usdt": str(funding_notional),
+                            "funding_valuation_method": "CURRENT_MARK_PRICE_PROXY; FUTURE_SETTLEMENT_MARK_UNKNOWN",
                             "funding_history": {k: str(v) for k, v in stats.items()},
                             "next_funding_time_ms": next_funding, "funding_interval_hours": funding_interval,
                             "spot_price": str(spot_buy.vwap), "futures_mark": str(mark),
@@ -478,6 +547,9 @@ class MarketScanner:
                             "gross_funding_usdt": str(gross_funding),
                             "estimated_fees_usdt": str(entry_fees + exit_fees),
                             "estimated_slippage_cost_usdt": str(slippage_cost),
+                            "estimated_market_impact_cost_usdt": str(slippage_cost),
+                            "estimated_spread_cost_usdt": str(spread_cost),
+                            "estimated_execution_cost_usdt": str(execution_cost),
                             "estimated_net_usdt": str(net), "status": "ESTIMATED_NOT_REALIZED",
                             "data_freshness": "FRESH", "max_field_age_ms": age_ms,
                             "field_timestamps_ms": ({} if not self.market_hub or not ws_ready else {

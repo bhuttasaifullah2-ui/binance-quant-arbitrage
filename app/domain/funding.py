@@ -75,7 +75,9 @@ def detect_funding_interval_hours(funding_times_ms: list[int], default_hours: in
                   else Decimal(ordered_gaps[mid-1] + ordered_gaps[mid]) / 2)
     hours = (median_gap / Decimal("3600000")).to_integral_value(rounding=ROUND_HALF_UP)
     result = int(hours)
-    return result if 1 <= result <= 24 else default_hours
+    # Documented USD-M perpetual intervals are 1h, 4h and 8h. An observed
+    # 16h gap must not be reclassified as a legitimate 16h interval.
+    return result if result in {1, 4, 8} else default_hours
 
 
 def funding_history_gaps(observations: list[FundingObservation], interval_hours: int,
@@ -86,3 +88,11 @@ def funding_history_gaps(observations: list[FundingObservation], interval_hours:
     ordered = sorted({x.funding_time_ms for x in observations})
     expected = interval_hours * 3600000
     return [(a, b) for a, b in zip(ordered, ordered[1:]) if b-a > expected+tolerance_ms]
+
+
+def linear_futures_funding_notional(quantity: Decimal, contract_multiplier: Decimal,
+                                    mark_price: Decimal) -> Decimal:
+    """Return linear USDⓈ-M position notional at the supplied mark price."""
+    if quantity <= 0 or contract_multiplier <= 0 or mark_price <= 0:
+        raise ValueError("quantity, contract multiplier and mark price must be positive")
+    return quantity * contract_multiplier * mark_price

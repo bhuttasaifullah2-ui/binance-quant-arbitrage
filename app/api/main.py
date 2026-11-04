@@ -3,7 +3,6 @@ import logging
 import time
 from contextlib import asynccontextmanager
 from decimal import Decimal
-from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
@@ -95,6 +94,7 @@ async def lifespan(app: FastAPI):
                         "futures_bid": fb[symbol].get("bidPrice"), "futures_ask": fb[symbol].get("askPrice"),
                         "futures_last": ft[symbol].get("lastPrice"), "futures_quote_volume": ft[symbol].get("quoteVolume"),
                         "futures_mark": pi[symbol].get("markPrice"), "futures_index": pi[symbol].get("indexPrice"),
+                        "futures_premium_time_ms": pi[symbol].get("time"),
                         "funding_rate": pi[symbol].get("lastFundingRate"),
                         "next_funding_time_ms": (int(pi[symbol]["nextFundingTime"]) - hub.clock_offsets_ms.get("futures", 0)
                                                  if pi[symbol].get("nextFundingTime") is not None else None)}, now, now)
@@ -115,7 +115,8 @@ async def lifespan(app: FastAPI):
         settings.max_clock_drift_ms, settings.max_validation_message_age_ms,
         settings.websocket_probe_timeout_seconds, settings.max_reconnect_attempts,
         settings.max_recovery_duration_ms, settings.max_message_processing_latency_ms,
-        settings.max_stale_symbols, market_store=store)
+        settings.max_stale_symbols, market_store=store,
+        websocket_probes_enabled=settings.websocket_enabled)
     app.state.binance_client = client
     app.state.market_store = store
     app.state.market_scanner = scanner

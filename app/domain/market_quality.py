@@ -1,5 +1,4 @@
 from decimal import Decimal
-from .models import MarketQuote
 
 def spread_bps(bid: Decimal, ask: Decimal) -> Decimal:
     if bid <= 0 or ask <= 0 or ask < bid:
