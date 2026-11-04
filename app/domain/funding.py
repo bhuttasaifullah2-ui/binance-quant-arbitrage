@@ -99,6 +99,17 @@ def funding_history_gaps(observations: list[FundingObservation], interval_hours:
     return [(a, b) for a, b in zip(ordered, ordered[1:]) if b-a > expected+tolerance_ms]
 
 
+def historical_settlement_cashflow_for_short(
+    quantity: Decimal, contract_multiplier: Decimal,
+    settlement_mark_price: Decimal | None, funding_rate: Decimal,
+) -> Decimal | None:
+    """Value a historical settlement for a hypothetical current short quantity."""
+    if settlement_mark_price is None:
+        return None
+    notional = linear_futures_funding_notional(quantity, contract_multiplier, settlement_mark_price)
+    return funding_payment(notional, funding_rate)
+
+
 def linear_futures_funding_notional(quantity: Decimal, contract_multiplier: Decimal,
                                     mark_price: Decimal) -> Decimal:
     """Return linear USDⓈ-M position notional at the supplied mark price."""
