@@ -45,3 +45,13 @@ def test_hedge_rejects_same_ticker_with_incompatible_base_asset():
     result = matched_valid_hedge(D("1000"), D("60000"), D("60010"), spot, futures)
     assert not result["executable"]
     assert "Spot and Futures base assets do not match" in result["reasons"]
+
+
+def test_hedge_rejects_missing_usdm_margin_asset_metadata():
+    spot = SymbolFilters.from_exchange_info(_meta(), "spot")
+    futures_meta = _meta()
+    futures_meta.pop("marginAsset")
+    futures = SymbolFilters.from_exchange_info(futures_meta, "futures")
+    result = matched_valid_hedge(D("1000"), D("60000"), D("60010"), spot, futures)
+    assert not result["executable"]
+    assert "USD-M Futures margin asset does not match the hedge quote asset" in result["reasons"]
