@@ -80,12 +80,11 @@ class SQLiteMarketStore:
             needs_rebuild = "settlement_mark_price" not in columns or "rate_type" not in columns
             if (row is not None and current_version < SCHEMA_VERSION) or needs_rebuild:
                 backup_path = Path(f"{self.path}.pre_v4.bak")
-                if not backup_path.exists():
-                    backup = sqlite3.connect(backup_path)
-                    try:
-                        conn.backup(backup)
-                    finally:
-                        backup.close()
+                backup = sqlite3.connect(backup_path)
+                try:
+                    conn.backup(backup)
+                finally:
+                    backup.close()
                 columns = {item["name"] for item in conn.execute(
                     "PRAGMA table_info(funding_observations)").fetchall()}
                 mark_expr = "settlement_mark_price" if "settlement_mark_price" in columns else "NULL"
