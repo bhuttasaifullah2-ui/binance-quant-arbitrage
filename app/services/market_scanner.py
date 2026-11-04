@@ -321,17 +321,32 @@ class MarketScanner:
                             if rate is not None and stamp is not None:
                                 funding_obs.append(FundingObservation(symbol, _d(rate), int(stamp)))
                         stats = summarize_funding(funding_obs)
-                        funding_interval = detect_funding_interval_hours([x.funding_time_ms for x in funding_obs])
+                        funding_interval = funding_interval_overrides.get(
+                            symbol, detect_funding_interval_hours([x.funding_time_ms for x in funding_obs]))
                         history_gaps = funding_history_gaps(funding_obs, funding_interval)
                         latest_history = max(funding_obs, key=lambda x: x.funding_time_ms) if funding_obs else None
-                        funding_consistent = (latest_history is not None and
+                        rate_consistent = (latest_history is not None and
                             abs(funding-latest_history.funding_rate) <= _d(getattr(self.config, "funding_reconciliation_tolerance", "0.00000001")))
+                        expected_latest_settlement_ms = next_funding - funding_interval * 3600000
+                        settlement_time_consistent = (latest_history is not None and
+                            abs(latest_history.funding_time_ms - expected_latest_settlement_ms) <= 60000)
+                        funding_consistent = rate_consistent and settlement_time_consistent
+                        if latest_history is None:
+                            self._reject(symbol, "no realized funding settlement history is available", now,
+                                         "FUNDING_HISTORY_MISSING")
+                            continue
                         if history_gaps:
                             self._reject(symbol, f"historical funding gaps detected:{len(history_gaps)}", now,
-                                         "FUNDING_HISTORY_INCONSISTENT")
-                        if not funding_consistent:
-                            self._reject(symbol, "current observed funding does not reconcile with latest realized settlement",
-                                         now, "FUNDING_HISTORY_INCONSISTENT")
+                                         "FUNDING_HISTORY_GAP")
+                            continue
+                        if not rate_consistent:
+                            self._reject(symbol, "latest funding rate does not reconcile with the latest realized settlement",
+                                         now, "FUNDING_RECONCILIATION_MISMATCH")
+                            continue
+                        if not settlement_time_consistent:
+                            self._reject(symbol, "latest realized settlement timestamp does not match the expected schedule",
+                                         now, "FUNDING_HISTORY_STALE")
+                            continue
                         bps = basis_bps(spot_buy.vwap, fut_sell.vwap)
                         basis_penalty = abs(bps)/Decimal("10000")*matched_notional*_d(self.config.basis_risk_haircut)
                         net = gross_funding - entry_fees - exit_fees - slippage_cost - basis_penalty
