@@ -10,7 +10,8 @@ from app.domain.funding import (summarize_funding, funding_history_gaps,
 from app.domain.funding_integrity import (
     FUNDING_RATE_RECONCILED, HISTORY_INCOMPLETE, HISTORY_MISSING, HISTORY_STALE,
     HISTORY_RECONCILIATION_FAILED, adjusted_rate_within_limits, assess_funding_history,
-    compatible_spot_futures, resolve_funding_interval, snapshot_skew_is_acceptable,
+    compatible_spot_futures, resolve_funding_interval, snapshot_fields_are_acceptable,
+    deduplicate_economic_settlements,
 )
 from app.domain.market_quality import basis_bps, spread_bps
 from app.domain.models import FundingObservation
@@ -161,22 +162,19 @@ class MarketScanner:
             if not freshness["valid"]:
                 self._reject(symbol, ";".join(freshness["reasons"]), now)
                 continue
-            spot_times = [state.fields[name].received_at_ms for name in
-                          ("spot_bid", "spot_ask", "spot_last", "spot_quote_volume")
-                          if name in state.fields]
-            futures_times = [state.fields[name].received_at_ms for name in
-                             ("futures_bid", "futures_ask", "futures_last", "futures_quote_volume",
-                              "futures_mark", "futures_index", "funding_rate", "next_funding_time_ms")
-                             if name in state.fields]
-            if not spot_times or not futures_times:
-                self._reject(symbol, "Spot/Futures WebSocket snapshot timestamps are unavailable",
-                             now, "MARKET_SNAPSHOT_SKEW_TOO_HIGH")
-                continue
-            symbol_skew_ms = abs(max(spot_times) - max(futures_times))
+            field_names = ("spot_bid", "spot_ask", "spot_last", "spot_quote_volume",
+                           "futures_bid", "futures_ask", "futures_last", "futures_quote_volume",
+                           "futures_mark", "futures_index", "funding_rate", "next_funding_time_ms")
+            field_times = {name: state.fields[name].received_at_ms for name in field_names
+                           if name in state.fields}
+            symbol_skew_ms = (max(field_times.values()) - min(field_times.values())
+                              if len(field_times) == len(field_names) else 0)
             self._snapshot_skew_by_symbol[symbol] = symbol_skew_ms
-            if not snapshot_skew_is_acceptable(max(spot_times), max(futures_times),
-                                               getattr(self.config, "max_clock_skew_ms", 5000)):
-                self._reject(symbol, "Spot/Futures WebSocket snapshot timestamps diverge",
+            if not snapshot_fields_are_acceptable(
+                field_times, now_ms=now, max_age_ms=max_age,
+                max_skew_ms=getattr(self.config, "max_clock_skew_ms", 5000),
+            ):
+                self._reject(symbol, "Spot/Futures WebSocket required-field timestamps are stale, missing or staggered",
                              now, "MARKET_SNAPSHOT_SKEW_TOO_HIGH")
                 continue
             spot_t[symbol] = {"lastPrice": snap["spot_last"], "quoteVolume": snap["spot_quote_volume"]}
@@ -234,27 +232,39 @@ class MarketScanner:
                 else:
                     rest_started = int(time.time() * 1000)
                     rest_snapshot_ms = rest_started
-                    async def fetch_spot_snapshot():
+
+                    async def timed_request(request):
                         request_start = int(time.time() * 1000)
-                        values = await asyncio.gather(self.client.spot_ticker_24h(),
-                                                       self.client.spot_book_ticker())
+                        value = await request
                         request_end = int(time.time() * 1000)
-                        return values, (request_start + request_end) // 2
-                    async def fetch_futures_snapshot():
-                        request_start = int(time.time() * 1000)
-                        values = await asyncio.gather(self.client.futures_ticker_24h(),
-                            self.client.futures_book_ticker(), self.client.futures_premium_index())
-                        request_end = int(time.time() * 1000)
-                        return values, (request_start + request_end) // 2
-                    (spot_values, spot_snapshot_ms), (futures_values, futures_snapshot_ms) = await asyncio.gather(
-                        fetch_spot_snapshot(), fetch_futures_snapshot())
-                    spot_tickers, spot_books = spot_values
-                    fut_tickers, fut_books, premium = futures_values
-                    snapshot_skew_ms = abs(spot_snapshot_ms - futures_snapshot_ms)
-                    if snapshot_skew_ms > getattr(self.config, "max_clock_skew_ms", 5000):
+                        return value, (request_start + request_end) // 2
+
+                    (spot_tickers, spot_ticker_ms), (spot_books, spot_book_ms), \
+                    (fut_tickers, futures_ticker_ms), (fut_books, futures_book_ms), \
+                    (premium, premium_ms) = await asyncio.gather(
+                        timed_request(self.client.spot_ticker_24h()),
+                        timed_request(self.client.spot_book_ticker()),
+                        timed_request(self.client.futures_ticker_24h()),
+                        timed_request(self.client.futures_book_ticker()),
+                        timed_request(self.client.futures_premium_index()),
+                    )
+                    rest_field_times = {
+                        "spot_bid": spot_book_ms, "spot_ask": spot_book_ms,
+                        "spot_last": spot_ticker_ms, "spot_quote_volume": spot_ticker_ms,
+                        "futures_bid": futures_book_ms, "futures_ask": futures_book_ms,
+                        "futures_last": futures_ticker_ms, "futures_quote_volume": futures_ticker_ms,
+                        "futures_mark": premium_ms, "futures_index": premium_ms,
+                        "funding_rate": premium_ms, "next_funding_time_ms": premium_ms,
+                    }
+                    snapshot_skew_ms = max(rest_field_times.values()) - min(rest_field_times.values())
+                    if not snapshot_fields_are_acceptable(
+                        rest_field_times, now_ms=int(time.time() * 1000),
+                        max_age_ms=getattr(self.config, "max_data_age_seconds", 75) * 1000,
+                        max_skew_ms=getattr(self.config, "max_clock_skew_ms", 5000),
+                    ):
                         for candidate in common:
                             self._reject(candidate,
-                                f"Spot/Futures REST snapshot divergence {snapshot_skew_ms}ms exceeds configured bound",
+                                f"Spot/Futures REST per-request midpoint range {snapshot_skew_ms}ms is stale or exceeds configured bound",
                                 int(time.time() * 1000), "MARKET_SNAPSHOT_SKEW_TOO_HIGH")
                         common = []
                     spot_t = {x["symbol"]: x for x in spot_tickers if x.get("symbol") in common}
@@ -298,13 +308,15 @@ class MarketScanner:
                             rows = await fetch_funding_history(
                                 self.client, symbol, start_time_ms=None if latest is None else latest + 1,
                                 page_size=min(self.config.history_limit, 1000),
-                                max_pages=self.config.funding_history_max_pages)
+                                max_pages=self.config.funding_history_max_pages, priority="current")
                             existing = self.store.funding_history(symbol, self.config.history_limit)
-                            existing_obs = [FundingObservation(symbol, _d(x["funding_rate"]), int(x["funding_time_ms"]))
-                                            for x in existing]
+                            existing_obs = [FundingObservation(
+                                symbol, _d(x["funding_rate"]), int(x["funding_time_ms"]),
+                                None if x.get("settlement_mark_price") is None else _d(x["settlement_mark_price"]),
+                                x.get("rate_type") or "Regular", x.get("source")) for x in existing]
                             interval, _ = resolve_funding_interval(
                                 funding_info_by_symbol.get(symbol),
-                                [x.funding_time_ms for x in existing_obs])
+                                [x.funding_time_ms for x in existing_obs if x.rate_type == "Regular"])
                             if existing_obs and interval is not None:
                                 gaps = funding_history_gaps(existing_obs, interval)
                                 if gaps:
@@ -314,7 +326,7 @@ class MarketScanner:
                                         start_time_ms=gap_start + interval*3600000,
                                         end_time_ms=gap_end-1,
                                         page_size=min(self.config.history_limit, 1000),
-                                        max_pages=self.config.funding_history_max_pages)
+                                        max_pages=self.config.funding_history_max_pages, priority="backfill")
                                     rows.extend(backfill)
                             return rows
                         history_tasks = [history_fetch()]
@@ -330,17 +342,7 @@ class MarketScanner:
                         self._reject(symbol, f"detailed market request failed:{type(result).__name__}", now); continue
                     sd, fd, oi, new_history = result
                     stored_history = self.store.funding_history(symbol, self.config.history_limit)
-                    history_by_payload = {}
-                    for history_row in list(new_history) + stored_history:
-                        identity = (
-                            int(history_row.get("fundingTime", history_row.get("funding_time_ms", 0))),
-                            str(history_row.get("fundingRate", history_row.get("funding_rate", ""))),
-                            str(history_row.get("markPrice", history_row.get("settlement_mark_price")) or ""),
-                            str(history_row.get("rateType", history_row.get("rate_type")) or ""),
-                            str(history_row.get("source") or "binance_fapi_fundingRate"),
-                        )
-                        history_by_payload[identity] = history_row
-                    hist = list(history_by_payload.values())
+                    hist = deduplicate_economic_settlements(list(new_history) + stored_history)
                     try:
                         if not sd.get("bids") or not sd.get("asks") or not fd.get("bids") or not fd.get("asks"):
                             self._reject(symbol, "missing order-book side", now); continue
@@ -404,11 +406,18 @@ class MarketScanner:
                         for x in hist:
                             rate = x.get("fundingRate", x.get("funding_rate"))
                             stamp = x.get("fundingTime", x.get("funding_time_ms"))
+                            mark_value = x.get("markPrice", x.get("settlement_mark_price"))
+                            rate_type = str(x.get("rateType", x.get("rate_type")) or "Regular")
+                            source_value = ",".join(x.get("sources", [])) or x.get("source")
                             if rate is not None and stamp is not None:
-                                funding_obs.append(FundingObservation(symbol, _d(rate), int(stamp)))
+                                funding_obs.append(FundingObservation(
+                                    symbol, _d(rate), int(stamp),
+                                    None if mark_value is None else _d(mark_value),
+                                    rate_type, source_value))
                         stats = summarize_funding(funding_obs)
                         funding_interval, interval_source = resolve_funding_interval(
-                            funding_info_by_symbol.get(symbol), [x.funding_time_ms for x in funding_obs])
+                            funding_info_by_symbol.get(symbol),
+                            [x.funding_time_ms for x in funding_obs if x.rate_type == "Regular"])
                         history_gaps = (funding_history_gaps(funding_obs, funding_interval)
                                         if funding_interval is not None else [])
                         funding_state = assess_funding_history(
