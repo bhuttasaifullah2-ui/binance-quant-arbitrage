@@ -166,7 +166,7 @@ def test_migration_backup_is_unique_and_integrity_checked_before_rebuild(tmp_pat
                 (1, 'BTCUSDT', 100, '0.001', 101, 'legacy');
         """)
     store = SQLiteMarketStore(str(db))
-    first_backup = next(tmp_path.glob("legacy.sqlite.pre_v4.*.bak"))
+    first_backup = next(tmp_path.glob("legacy.sqlite.pre_v5.*.bak"))
     assert sqlite3.connect(first_backup).execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     store._initialize()
     assert first_backup.exists()
@@ -309,7 +309,9 @@ def test_database_source_provenance_duplicates_are_not_economic_conflicts(tmp_pa
            "markPrice": "50000", "rateType": "Regular"}
     store.save_funding_observations("BTCUSDT", [{**row, "source": "primary"}], BASE + 1)
     store.save_funding_observations("BTCUSDT", [{**row, "source": "backfill"}], BASE + 2)
-    assert len(store.funding_history("BTCUSDT")) == 2
+    history = store.funding_history("BTCUSDT")
+    assert len(history) == 1
+    assert set(history[0]["sources"]) == {"primary", "backfill"}
     assert store.funding_history_conflicts("BTCUSDT") == []
 
 
