@@ -186,8 +186,8 @@ class SQLiteMarketStore:
                 raise sqlite3.DatabaseError("backup failed SQLite integrity_check")
             tables = {row[0] for row in source.execute(
                 "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
-            if not {"schema_version", "funding_observations"}.issubset(tables):
-                raise sqlite3.DatabaseError("backup is missing expected market-store tables")
+            if "funding_observations" not in tables:
+                raise sqlite3.DatabaseError("backup is missing the funding_observations table")
             destination.parent.mkdir(parents=True, exist_ok=True)
             descriptor = os.open(temp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             os.close(descriptor)
