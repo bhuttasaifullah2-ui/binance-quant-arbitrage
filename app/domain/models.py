@@ -7,6 +7,9 @@ class FundingObservation:
     symbol: str
     funding_rate: Decimal
     funding_time_ms: int
+    settlement_mark_price: Decimal | None = None
+    rate_type: str = "Regular"
+    source: str | None = None
 
 @dataclass(frozen=True)
 class MarketQuote:
