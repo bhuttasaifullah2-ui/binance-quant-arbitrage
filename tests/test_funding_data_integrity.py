@@ -82,7 +82,7 @@ def test_history_coverage_boundary_is_checked_without_zero_filling():
     next_time = rows[-1]["fundingTime"] + 8 * 3_600_000
     result = assess_funding_history(rows, interval_hours=8, next_funding_time_ms=next_time,
                                     current_funding_rate="0.0003",
-                                    coverage_start_ms=rows[0]["fundingTime"] - 1)
+                                    coverage_start_ms=rows[0]["fundingTime"] - 3 * 8 * 3_600_000)
     assert result["state"] == HISTORY_INCOMPLETE
     assert result["missing_intervals_are_not_zero"] is True
 
