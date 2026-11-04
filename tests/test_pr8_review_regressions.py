@@ -301,3 +301,23 @@ def test_same_time_regular_and_special_are_separate_not_conflicting():
     assert result["state"] == FUNDING_RATE_RECONCILED
     assert result["regular_settlement_count"] == 3
     assert result["special_event_count"] == 1
+
+
+def test_database_source_provenance_duplicates_are_not_economic_conflicts(tmp_path):
+    store = SQLiteMarketStore(str(tmp_path / "source-duplicates.sqlite"))
+    row = {"fundingTime": BASE, "fundingRate": "0.0001",
+           "markPrice": "50000", "rateType": "Regular"}
+    store.save_funding_observations("BTCUSDT", [{**row, "source": "primary"}], BASE + 1)
+    store.save_funding_observations("BTCUSDT", [{**row, "source": "backfill"}], BASE + 2)
+    assert len(store.funding_history("BTCUSDT")) == 2
+    assert store.funding_history_conflicts("BTCUSDT") == []
+
+
+def test_backup_destination_is_never_overwritten(tmp_path):
+    store = SQLiteMarketStore(str(tmp_path / "backup-source.sqlite"))
+    destination = tmp_path / "backup-once.sqlite"
+    store.backup_to(str(destination))
+    before = destination.read_bytes()
+    with pytest.raises(FileExistsError):
+        store.backup_to(str(destination))
+    assert destination.read_bytes() == before
