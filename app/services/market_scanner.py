@@ -431,7 +431,7 @@ class MarketScanner:
                                     (self.market_hub.clock_offsets_ms.get("futures", 0)
                                      if self.market_hub else 0))
                             if funding_source_time_ms is not None and not (
-                                    0 < funding_source_time_ms <= now + self.config.max_clock_skew_ms):
+                                    0 < funding_source_time_ms <= now + getattr(self.config, "max_clock_skew_ms", 5000)):
                                 funding_source_time_ms = None
                             funding_age = (None if funding_source_time_ms is None
                                            else max(0, now-funding_source_time_ms))
