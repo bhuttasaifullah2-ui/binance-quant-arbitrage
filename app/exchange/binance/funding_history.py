@@ -42,8 +42,10 @@ async def fetch_funding_history_with_stats(client: BinancePublicClient, symbol: 
         if not page:
             break
         valid = [x for x in page if "fundingTime" in x and "fundingRate" in x]
-        if not valid:
-            break
+        if len(valid) != len(page):
+            raise FundingHistoryPaginationError(
+                f"funding history for {symbol} returned malformed settlement rows"
+            )
         new_rows = 0
         for row in valid:
             identity = (
