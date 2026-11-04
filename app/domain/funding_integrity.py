@@ -145,13 +145,17 @@ def adjusted_rate_within_limits(rate: Decimal | str, funding_info: dict[str, Any
 
 def compatible_spot_futures(spot: dict[str, Any], futures: dict[str, Any]) -> bool:
     """Require matching explicit base and quote assets, not just a matching ticker."""
+    try:
+        contract_size = Decimal(str(futures.get("contractSize", "1")))
+    except (TypeError, ValueError, InvalidOperation):
+        return False
     return bool(
         spot.get("symbol") == futures.get("symbol")
         and spot.get("baseAsset")
         and spot.get("baseAsset") == futures.get("baseAsset")
         and spot.get("quoteAsset")
         and spot.get("quoteAsset") == futures.get("quoteAsset")
-        and Decimal(str(futures.get("contractSize", "1"))) > 0
+        and contract_size > 0
     )
 
 
