@@ -16,7 +16,8 @@ from app.domain.funding_integrity import (
     deduplicate_economic_settlements,
 )
 from app.domain.models import FundingObservation
-from app.exchange.binance.funding_history import fetch_funding_history_with_stats
+from app.exchange.binance.funding_history import (fetch_funding_history_with_stats,
+                                                   FundingHistoryPaginationError)
 from app.exchange.binance.public_client import BinanceAPIError, BinancePublicClient, FundingRequestBudget
 from app.infrastructure.sqlite_store import SQLiteMarketStore
 
@@ -363,3 +364,18 @@ def test_restore_rejects_missing_and_empty_sqlite_backup(tmp_path):
     with pytest.raises(sqlite3.DatabaseError, match="funding_observations table"):
         SQLiteMarketStore.restore_from_backup(str(empty), str(destination))
     assert not destination.exists()
+
+
+@pytest.mark.asyncio
+async def test_full_page_without_pagination_progress_fails_closed():
+    class RepeatingClient:
+        async def futures_funding_history(self, symbol, limit, start_time_ms=None, end_time_ms=None):
+            return [
+                {"fundingTime": 200, "fundingRate": "0.001", "rateType": "Regular"},
+                {"fundingTime": 200, "fundingRate": "0.001", "rateType": "Regular"},
+            ]
+
+    with pytest.raises(FundingHistoryPaginationError, match="did not advance"):
+        await fetch_funding_history_with_stats(
+            RepeatingClient(), "BTCUSDT", page_size=2, max_pages=3
+        )
