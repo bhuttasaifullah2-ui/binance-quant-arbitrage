@@ -10,7 +10,7 @@ from app.domain.funding import (summarize_funding, detect_funding_interval_hours
 from app.domain.funding_integrity import (
     FUNDING_RATE_RECONCILED, HISTORY_INCOMPLETE, HISTORY_MISSING, HISTORY_STALE,
     HISTORY_RECONCILIATION_FAILED, adjusted_rate_within_limits, assess_funding_history,
-    compatible_spot_futures, resolve_funding_interval,
+    compatible_spot_futures, resolve_funding_interval, snapshot_skew_is_acceptable,
 )
 from app.domain.market_quality import basis_bps, spread_bps
 from app.domain.models import FundingObservation
@@ -177,6 +177,19 @@ class MarketScanner:
             if not freshness["valid"]:
                 self._reject(symbol, ";".join(freshness["reasons"]), now)
                 continue
+            spot_times = [state.fields[name].received_at_ms for name in
+                          ("spot_bid", "spot_ask", "spot_last", "spot_quote_volume")
+                          if name in state.fields]
+            futures_times = [state.fields[name].received_at_ms for name in
+                             ("futures_bid", "futures_ask", "futures_last", "futures_quote_volume",
+                              "futures_mark", "futures_index", "funding_rate", "next_funding_time_ms")
+                             if name in state.fields]
+            if (not spot_times or not futures_times or
+                    not snapshot_skew_is_acceptable(max(spot_times), max(futures_times),
+                                                    self.config.max_clock_skew_ms)):
+                self._reject(symbol, "Spot/Futures WebSocket snapshot timestamps diverge or are unavailable",
+                             now, "MARKET_SNAPSHOT_SKEW_TOO_HIGH")
+                continue
             spot_t[symbol] = {"lastPrice": snap["spot_last"], "quoteVolume": snap["spot_quote_volume"]}
             spot_b[symbol] = {"bidPrice": snap["spot_bid"], "askPrice": snap["spot_ask"]}
             fut_t[symbol] = {"lastPrice": snap["futures_last"], "quoteVolume": snap["futures_quote_volume"]}
@@ -209,6 +222,7 @@ class MarketScanner:
                     self.websocket_manager.set_symbols(set(common))
                 ws_ready = bool(self.config.websocket_enabled and self.market_hub and self._ws_bootstrap_done)
                 rest_snapshot_ms: int | None = None
+                snapshot_skew_ms = 0
                 if ws_ready:
                     spot_t, spot_b, fut_t, fut_b, prem = self._hub_maps(common, int(time.time()*1000))
                 else:
@@ -463,6 +477,12 @@ class MarketScanner:
                             self._reject(symbol, "next funding timestamp is expired", now, "FUNDING_TIMESTAMP_INVALID"); continue
                         if stats["count"] == 0:
                             self._reject(symbol, "funding history missing realized settlements", now, "FUNDING_HISTORY_MISSING"); continue
+                        if funding_state["state"] != FUNDING_RATE_RECONCILED:
+                            # A diagnostic rejection is not enough: incomplete or conflicting
+                            # settlement evidence must never reach the opportunity list.
+                            continue
+                        if funding_info is not None and rate_limit_ok is not True:
+                            continue
                         if history_stale:
                             self._reject(symbol, "funding history stale relative to expected previous settlement", now, "FUNDING_HISTORY_STALE"); continue
                         if net <= _d(self.config.min_net_edge_usdt):
@@ -558,6 +578,7 @@ class MarketScanner:
                             "funding_history_state": funding_state["state"],
                             "funding_interval_source": interval_source,
                             "funding_info_available": funding_info is not None,
+                            "spot_futures_snapshot_skew_ms": snapshot_skew_ms,
                             "funding_info_fetch_error": self._funding_info_error,
                             "settlement_mark_price": funding_state.get("settlement_mark_price"),
                             "realized_settlement_cashflow_for_current_quantity_usdt": (
