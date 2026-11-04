@@ -315,6 +315,9 @@ def test_database_source_provenance_duplicates_are_not_economic_conflicts(tmp_pa
     history = store.funding_history("BTCUSDT")
     assert len(history) == 1
     assert set(history[0]["sources"]) == {"primary", "backfill"}
+    assert {(item["source"], item["observed_at_ms"]) for item in history[0]["source_observations"]} == {
+        ("primary", BASE + 1), ("backfill", BASE + 2)
+    }
     assert store.funding_history_conflicts("BTCUSDT") == []
 
 
