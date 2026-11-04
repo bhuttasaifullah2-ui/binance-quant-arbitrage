@@ -192,9 +192,9 @@ def test_migration_rollback_and_retry_preserve_legacy_row(tmp_path, monkeypatch)
 
     class FailCopyConnection(sqlite3.Connection):
         def execute(self, sql, parameters=()):
-            if "INSERT INTO funding_observations_v5" in sql and not failed["value"]:
+            if "CREATE UNIQUE INDEX uq_funding_economic_event" in sql and not failed["value"]:
                 failed["value"] = True
-                raise sqlite3.OperationalError("injected interrupted migration")
+                raise sqlite3.OperationalError("injected interruption after table replacement")
             return super().execute(sql, parameters)
 
     def connect_with_failure(path, *args, **kwargs):
