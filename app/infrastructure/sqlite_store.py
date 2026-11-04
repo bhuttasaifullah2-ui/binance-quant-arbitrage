@@ -79,6 +79,8 @@ class SQLiteMarketStore:
     def _create_verified_backup(self, conn: sqlite3.Connection, destination: Path) -> str:
         """Create a non-overwriting online backup and verify it before migration."""
         destination.parent.mkdir(parents=True, exist_ok=True)
+        if any(Path(f"{destination}{suffix}").exists() for suffix in ("-wal", "-shm", "-journal")):
+            raise FileExistsError("backup destination SQLite sidecar already exists")
         descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         os.close(descriptor)
         target = None
@@ -396,9 +398,11 @@ class SQLiteMarketStore:
             result = []
             for row in rows:
                 item = dict(row)
-                sources = conn.execute("""SELECT DISTINCT source FROM funding_observation_sources
-                    WHERE funding_observation_id=? ORDER BY source""", (int(row["id"]),)).fetchall()
-                item["sources"] = [source_row["source"] for source_row in sources] or [item["source"]]
+                provenance = conn.execute("""SELECT source,observed_at_ms FROM funding_observation_sources
+                    WHERE funding_observation_id=? ORDER BY observed_at_ms,source""",
+                    (int(row["id"]),)).fetchall()
+                item["source_observations"] = [dict(source_row) for source_row in provenance]
+                item["sources"] = sorted({source_row["source"] for source_row in provenance}) or [item["source"]]
                 result.append(item)
         return result
 
