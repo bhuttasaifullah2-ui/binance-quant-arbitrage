@@ -28,6 +28,11 @@ def test_v3_funding_migration_preserves_legacy_record_and_creates_backup(tmp_pat
     assert history[0]["source"] == "legacy"
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 4
+    backup = next(tmp_path.glob("no-version.sqlite.pre_v4.*.bak"))
+    restored = SQLiteMarketStore.restore_from_backup(
+        str(backup), str(tmp_path / "restored-legacy-no-version.sqlite")
+    )
+    assert restored.funding_history("SOLUSDT")[0]["funding_rate"] == "0.0003"
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     backup = next(tmp_path.glob("legacy.sqlite3.pre_v4.*.bak"))
     assert backup.exists()
