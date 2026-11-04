@@ -7,7 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS market_observations (
@@ -25,6 +25,10 @@ CREATE TABLE IF NOT EXISTS funding_observations (
  funding_rate TEXT NOT NULL, settlement_mark_price TEXT, rate_type TEXT,
  observed_at_ms INTEGER NOT NULL, source TEXT NOT NULL DEFAULT 'binance_fapi_fundingRate');
 CREATE INDEX IF NOT EXISTS idx_funding_symbol_time ON funding_observations(symbol, funding_time_ms DESC);
+CREATE TABLE IF NOT EXISTS funding_observation_sources (
+ funding_observation_id INTEGER NOT NULL REFERENCES funding_observations(id) ON DELETE CASCADE,
+ source TEXT NOT NULL, observed_at_ms INTEGER NOT NULL,
+ PRIMARY KEY(funding_observation_id, source, observed_at_ms));
 CREATE TABLE IF NOT EXISTS exchange_symbol_metadata (
  market TEXT NOT NULL, symbol TEXT NOT NULL, updated_at_ms INTEGER NOT NULL,
  metadata_json TEXT NOT NULL, PRIMARY KEY(market, symbol));
@@ -111,12 +115,11 @@ class SQLiteMarketStore:
                 current_version < SCHEMA_VERSION
                 or "settlement_mark_price" not in columns
                 or "rate_type" not in columns
+                or "funding_observation_sources" not in tables
             )
 
             if needs_rebuild:
-                backup_path = Path(
-                    f"{self.path}.pre_v4.{uuid.uuid4().hex}.bak"
-                )
+                backup_path = Path(f"{self.path}.pre_v5.{uuid.uuid4().hex}.bak")
                 self.last_migration_backup_path = self._create_verified_backup(conn, backup_path)
                 mark_expr = "settlement_mark_price" if "settlement_mark_price" in columns else "NULL"
                 type_expr = "rate_type" if "rate_type" in columns else "NULL"
@@ -125,20 +128,41 @@ class SQLiteMarketStore:
                 try:
                     if not has_version:
                         conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
-                    conn.execute("""CREATE TABLE funding_observations_v4 (
+                    conn.execute("""CREATE TABLE funding_observations_v5 (
                         id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL,
                         funding_time_ms INTEGER NOT NULL, funding_rate TEXT NOT NULL,
                         settlement_mark_price TEXT, rate_type TEXT, observed_at_ms INTEGER NOT NULL,
                         source TEXT NOT NULL DEFAULT 'binance_fapi_fundingRate')""")
-                    conn.execute(f"""INSERT INTO funding_observations_v4
+                    conn.execute(f"""INSERT INTO funding_observations_v5
                         (id,symbol,funding_time_ms,funding_rate,settlement_mark_price,rate_type,
                          observed_at_ms,source)
                         SELECT id,symbol,funding_time_ms,funding_rate,{mark_expr},{type_expr},
                                observed_at_ms,{source_expr} FROM funding_observations""")
                     conn.execute("DROP TABLE funding_observations")
-                    conn.execute("ALTER TABLE funding_observations_v4 RENAME TO funding_observations")
+                    conn.execute("ALTER TABLE funding_observations_v5 RENAME TO funding_observations")
+                    conn.execute("""CREATE TABLE IF NOT EXISTS funding_observation_sources (
+                        funding_observation_id INTEGER NOT NULL
+                            REFERENCES funding_observations(id) ON DELETE CASCADE,
+                        source TEXT NOT NULL, observed_at_ms INTEGER NOT NULL,
+                        PRIMARY KEY(funding_observation_id, source, observed_at_ms))""")
+                    conn.execute("""INSERT OR IGNORE INTO funding_observation_sources
+                        (funding_observation_id,source,observed_at_ms)
+                        SELECT (SELECT MIN(c.id) FROM funding_observations c
+                                WHERE c.symbol=o.symbol AND c.funding_time_ms=o.funding_time_ms
+                                  AND c.funding_rate=o.funding_rate
+                                  AND COALESCE(c.settlement_mark_price,'')=COALESCE(o.settlement_mark_price,'')
+                                  AND COALESCE(c.rate_type,'')=COALESCE(o.rate_type,'')),
+                               o.source,o.observed_at_ms
+                        FROM funding_observations o""")
+                    conn.execute("""DELETE FROM funding_observations WHERE id NOT IN (
+                        SELECT MIN(id) FROM funding_observations
+                        GROUP BY symbol,funding_time_ms,funding_rate,
+                                 COALESCE(settlement_mark_price,''),COALESCE(rate_type,''))""")
                     conn.execute("""CREATE INDEX idx_funding_symbol_time
                         ON funding_observations(symbol, funding_time_ms DESC)""")
+                    conn.execute("""CREATE UNIQUE INDEX uq_funding_economic_event
+                        ON funding_observations(symbol,funding_time_ms,funding_rate,
+                            COALESCE(settlement_mark_price,''),COALESCE(rate_type,''))""")
                     conn.execute("DELETE FROM schema_version")
                     conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
                     conn.commit()
@@ -146,17 +170,16 @@ class SQLiteMarketStore:
                     conn.rollback()
                     raise
 
-            # Create ancillary tables/indexes only after the funding-table migration
-            # has committed. If interrupted here, a repeated initialization is safe.
+            # Ancillary schema creation is restart-safe after the transactional migration.
             conn.executescript(SCHEMA)
             version_row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
             if version_row is None:
                 conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
             elif int(version_row["version"]) < SCHEMA_VERSION:
                 conn.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
-            conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_funding_event_payload
+            conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_funding_economic_event
                 ON funding_observations(symbol, funding_time_ms, funding_rate,
-                    COALESCE(settlement_mark_price, ''), COALESCE(rate_type, ''), source)""")
+                    COALESCE(settlement_mark_price, ''), COALESCE(rate_type, ''))""")
 
     def backup_to(self, destination_path: str) -> str:
         """Create a consistent, verified online backup without overwriting a prior file."""
