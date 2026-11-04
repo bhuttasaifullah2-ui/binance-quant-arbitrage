@@ -232,7 +232,7 @@ class LiveValidationService:
                                  latest_settlement_time is not None and
                                  abs(latest_settlement_time - expected_latest_settlement) <= 60000)
         raw_current_time = None if item is None else item.get("time")
-        clock_offset = self.hub.clock_offsets_ms.get("futures", 0) if self.hub is not None else 0
+        clock_offset = getattr(self.hub, "clock_offsets_ms", {}).get("futures", 0)
         current_source_time = None if raw_current_time is None else int(raw_current_time) - clock_offset
         current_source_time_valid = (current_source_time is not None and
                                       0 < current_source_time <= now + self.max_clock_drift_ms)
