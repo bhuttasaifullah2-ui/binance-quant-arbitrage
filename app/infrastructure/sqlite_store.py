@@ -345,13 +345,22 @@ class SQLiteMarketStore:
         return [dict(row) for row in rows]
 
     def funding_history_conflicts(self, symbol: str) -> list[dict[str, Any]]:
-        """Expose timestamps containing multiple distinct settlement payloads."""
+        """Report same-time, same-rateType economic payload disagreements only."""
         with self._connect() as conn:
-            rows = conn.execute("""SELECT funding_time_ms,COUNT(*) AS record_count
-                FROM funding_observations WHERE symbol=? GROUP BY funding_time_ms
-                HAVING COUNT(*) > 1 ORDER BY funding_time_ms DESC""",
+            rows = conn.execute("""SELECT funding_time_ms,funding_rate,settlement_mark_price,rate_type
+                FROM funding_observations WHERE symbol=? ORDER BY funding_time_ms DESC""",
                 (symbol.upper(),)).fetchall()
-        return [dict(row) for row in rows]
+        variants: dict[tuple[int, str], set[tuple[str, str]]] = {}
+        for row in rows:
+            key = (int(row["funding_time_ms"]), str(row["rate_type"] or "Regular"))
+            payload = (str(row["funding_rate"]), str(row["settlement_mark_price"] or ""))
+            variants.setdefault(key, set()).add(payload)
+        conflicts: dict[int, int] = {}
+        for (stamp, _event_type), payloads in variants.items():
+            if len(payloads) > 1:
+                conflicts[stamp] = conflicts.get(stamp, 0) + len(payloads)
+        return [{"funding_time_ms": stamp, "record_count": count}
+                for stamp, count in sorted(conflicts.items(), reverse=True)]
 
     def history(self, symbol: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         with self._connect() as conn:
