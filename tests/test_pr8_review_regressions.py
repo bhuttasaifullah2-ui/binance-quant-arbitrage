@@ -268,6 +268,7 @@ async def test_rate_limit_applies_shared_cooldown_without_retry_storm(status):
             await client.acquire_funding_request("current")
         assert calls["count"] == 1
         client._funding_cooldown_until = 0.0
+        client._global_cooldown_until = 0.0
         await client.acquire_funding_request("current")
     finally:
         await client.close()
