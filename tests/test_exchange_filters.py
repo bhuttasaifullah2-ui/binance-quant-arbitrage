@@ -44,3 +44,26 @@ def test_hedge_rejects_same_ticker_with_incompatible_base_asset():
     result = matched_valid_hedge(D("1000"), D("60000"), D("60010"), spot, futures)
     assert not result["executable"]
     assert "Spot and Futures base assets do not match" in result["reasons"]
+
+
+
+def test_contract_size_normalizes_futures_quantity():
+    spot_meta = _meta()
+    spot_meta["filters"][1]["stepSize"] = "0.001"
+    spot_meta["filters"][1]["minQty"] = "0.001"
+    spot_meta["filters"][2]["stepSize"] = "0.001"
+    spot_meta["filters"][2]["minQty"] = "0.001"
+    futures_meta = _meta()
+    futures_meta["contractSize"] = "10"
+    futures_meta["filters"][1]["stepSize"] = "0.001"
+    futures_meta["filters"][1]["minQty"] = "0.001"
+    futures_meta["filters"][2]["stepSize"] = "0.001"
+    futures_meta["filters"][2]["minQty"] = "0.001"
+    spot = SymbolFilters.from_exchange_info(spot_meta, "spot")
+    futures = SymbolFilters.from_exchange_info(futures_meta, "futures")
+    result = matched_valid_hedge(D("1000"), D("100"), D("100"), spot, futures, D("0.005"))
+    assert result["spot_quantity"] == D("10")
+    assert result["futures_quantity"] == D("1")
+    assert result["spot_notional"] == D("1000")
+    assert result["futures_notional"] == D("1000")
+    assert result["executable"]
