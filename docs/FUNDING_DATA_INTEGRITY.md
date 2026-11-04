@@ -22,7 +22,7 @@ The research scanner distinguishes:
 - `HISTORY_RECONCILIATION_FAILED`: timestamp, rate, or same-time payload conflict.
 - `FUNDING_RATE_RECONCILED`: the latest settlement timestamp and rate reconcile within configured tolerances.
 
-No missing settlement is synthesized as a zero-rate event. A minimum of three distinct settlement timestamps is required. Coverage start/end timestamps are reported, but the bounded stored window does not claim that older history is complete.
+No missing settlement is synthesized as a zero-rate event. Pagination uses inclusive timestamp overlap to retain same-time Regular/Special events; a full page that cannot advance or a full final page at the configured page limit is treated as incomplete rather than silently accepted. A minimum of three distinct Regular settlement timestamps is required. Coverage start/end timestamps are reported, but the bounded stored window does not claim that older history is complete.
 
 ## SQLite v5 migration and conflict policy
 
