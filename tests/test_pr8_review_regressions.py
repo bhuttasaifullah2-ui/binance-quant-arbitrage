@@ -540,3 +540,25 @@ async def test_http_418_pauses_all_public_endpoints_without_retry():
         assert calls["count"] == 1
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_funding_info_and_history_share_one_endpoint_budget():
+    import httpx
+
+    async def handler(request):
+        return httpx.Response(200, json=[], request=request)
+
+    client = BinancePublicClient(
+        "https://spot.invalid", "https://futures.invalid",
+        funding_request_limit=2, funding_current_reserve=1,
+    )
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        await client.futures_funding_info()
+        await client.futures_funding_history("BTCUSDT", limit=10)
+        assert len(client.funding_request_budget._requests) == 2
+        with pytest.raises(RuntimeError, match="budget"):
+            await client.futures_funding_history("ETHUSDT", limit=10)
+    finally:
+        await client.close()
