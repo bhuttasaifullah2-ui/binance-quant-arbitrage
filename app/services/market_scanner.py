@@ -262,7 +262,9 @@ class MarketScanner:
                     hist = list(new_history) + self.store.funding_history(symbol, self.config.history_limit)
                     try:
                         if not sd.get("bids") or not sd.get("asks") or not fd.get("bids") or not fd.get("asks"):
-                            self._reject(symbol, "missing order-book side", now); continue
+                            self._reject(symbol, "missing order-book side", now,
+                                         "ORDERBOOK_LIQUIDITY_INSUFFICIENT")
+                            continue
                         spot_ask, spot_bid = _d(sb["askPrice"]), _d(sb["bidPrice"])
                         fut_ask, fut_bid = _d(fb["askPrice"]), _d(fb["bidPrice"])
                         mark, index = _d(pi["markPrice"]), _d(pi["indexPrice"])
@@ -298,7 +300,9 @@ class MarketScanner:
                         actual_validation = (list(spot_filter.validate(hedge["spot_quantity"], spot_buy.vwap))
                                              + list(futures_filter.validate(hedge["futures_quantity"], fut_sell.vwap)))
                         if actual_mismatch > _d(self.config.max_hedge_mismatch) or actual_validation:
-                            self._reject(symbol, ";".join(actual_validation) or "actual VWAP hedge mismatch exceeds limit", now); continue
+                            self._reject(symbol, ";".join(actual_validation) or "actual VWAP hedge mismatch exceeds limit",
+                                         now, "HEDGE_FILTER_VALIDATION_FAILED")
+                            continue
                         hedge["spot_notional"] = spot_entry_notional
                         hedge["futures_notional"] = futures_entry_notional
                         hedge["hedge_ratio"] = futures_entry_notional / spot_entry_notional
