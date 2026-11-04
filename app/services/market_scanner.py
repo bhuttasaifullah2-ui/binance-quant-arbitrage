@@ -5,11 +5,12 @@ from decimal import Decimal
 from typing import Any
 
 from app.domain.exchange_filters import SymbolFilters, matched_valid_hedge
-from app.domain.funding import summarize_funding, detect_funding_interval_hours, funding_history_gaps
+from app.domain.funding import funding_payment, summarize_funding, detect_funding_interval_hours, funding_history_gaps
 from app.domain.market_quality import basis_bps, spread_bps
 from app.domain.models import FundingObservation
 from app.domain.scanner_eligibility import validate_scanner_eligibility
 from app.domain.orderbook import estimate_vwap, estimate_vwap_quantity
+from app.domain.profitability import four_leg_execution_shortfall_usdt
 from app.domain.ranking import score_opportunity_breakdown, RankingWeights
 from app.exchange.binance.funding_history import fetch_funding_history
 from app.exchange.binance.public_client import BinancePublicClient
@@ -159,6 +160,14 @@ class MarketScanner:
             self._eligibility_decisions = {}
             try:
                 spot_info, fut_info = await self._metadata(started)
+                # Public exchange metadata exposes interval overrides for adjusted USD-M contracts.
+                funding_info_rows = await self.client.futures_funding_info()
+                funding_interval_overrides: dict[str, int] = {}
+                for info in funding_info_rows:
+                    symbol_key = str(info.get("symbol", "")).upper()
+                    hours = int(info.get("fundingIntervalHours", 0))
+                    if symbol_key and 1 <= hours <= 24:
+                        funding_interval_overrides[symbol_key] = hours
                 spot_symbols, fut_symbols = _eligible_spot(spot_info), _eligible_futures(fut_info)
                 common = sorted(spot_symbols & fut_symbols)
                 self.last_pair_count = len(common)
