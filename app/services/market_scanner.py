@@ -330,6 +330,7 @@ class MarketScanner:
                             str(history_row.get("fundingRate", history_row.get("funding_rate", ""))),
                             str(history_row.get("markPrice", history_row.get("settlement_mark_price")) or ""),
                             str(history_row.get("rateType", history_row.get("rate_type")) or ""),
+                            str(history_row.get("source") or "binance_fapi_fundingRate"),
                         )
                         history_by_payload[identity] = history_row
                     hist = list(history_by_payload.values())
