@@ -55,3 +55,17 @@ def test_hedge_rejects_missing_usdm_margin_asset_metadata():
     result = matched_valid_hedge(D("1000"), D("60000"), D("60010"), spot, futures)
     assert not result["executable"]
     assert "USD-M Futures margin asset does not match the hedge quote asset" in result["reasons"]
+
+
+def test_contract_size_normalizes_futures_quantity():
+    spot_meta = _meta()
+    futures_meta = _meta()
+    futures_meta["contractSize"] = "10"
+    spot = SymbolFilters.from_exchange_info(spot_meta, "spot")
+    futures = SymbolFilters.from_exchange_info(futures_meta, "futures")
+    result = matched_valid_hedge(D("1000"), D("100"), D("100"), spot, futures, D("0.005"))
+    assert result["spot_quantity"] == D("10")
+    assert result["futures_quantity"] == D("1")
+    assert result["spot_notional"] == D("1000")
+    assert result["futures_notional"] == D("1000")
+    assert result["executable"]
