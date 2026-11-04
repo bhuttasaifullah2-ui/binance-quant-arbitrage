@@ -424,9 +424,10 @@ class MarketScanner:
                                 funding_source_time_ms = int(funding_field.event_time_ms)
                             else:
                                 raw_funding_time = pi.get("time")
-                                funding_source_time_ms = (int(raw_funding_time) -
+                                funding_source_time_ms = (None if raw_funding_time is None else
+                                    int(raw_funding_time) -
                                     (self.market_hub.clock_offsets_ms.get("futures", 0)
-                                     if self.market_hub else 0)) if raw_funding_time is not None else int(funding_field.event_time_ms)
+                                     if self.market_hub else 0))
                             funding_age = (None if funding_source_time_ms is None
                                            else max(0, now-funding_source_time_ms))
                         else:
