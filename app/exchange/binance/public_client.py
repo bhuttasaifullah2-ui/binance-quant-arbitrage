@@ -102,7 +102,12 @@ class BinancePublicClient:
                 try:
                     response = await self._client.get(url, params=params)
                     if response.status_code in (418, 429):
-                        retry_after = float(response.headers.get("Retry-After", "60" if response.status_code == 418 else "1"))
+                        try:
+                            retry_after = float(response.headers.get(
+                                "Retry-After", "60" if response.status_code == 418 else "1"
+                            ))
+                        except ValueError:
+                            retry_after = 60.0 if response.status_code == 418 else 1.0
                         if is_funding_endpoint:
                             self._funding_cooldown_until = max(
                                 self._funding_cooldown_until,
