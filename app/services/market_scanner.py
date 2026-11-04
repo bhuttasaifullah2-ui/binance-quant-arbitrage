@@ -232,7 +232,8 @@ class MarketScanner:
                             existing_obs = [FundingObservation(symbol, _d(x["funding_rate"]), int(x["funding_time_ms"]))
                                             for x in existing]
                             if existing_obs:
-                                interval = detect_funding_interval_hours([x.funding_time_ms for x in existing_obs])
+                                interval = funding_interval_overrides.get(
+                                    symbol, detect_funding_interval_hours([x.funding_time_ms for x in existing_obs]))
                                 gaps = funding_history_gaps(existing_obs, interval)
                                 if gaps:
                                     gap_start, gap_end = gaps[0]
@@ -301,13 +302,16 @@ class MarketScanner:
                         hedge["mismatch_fraction"] = actual_mismatch
                         slips = [x.slippage_bps for x in executions if x is not None]
                         matched_notional = min(spot_entry_notional, futures_entry_notional)
-                        gross_funding = matched_notional * funding
+                        funding_notional = hedge["futures_quantity"] * mark * futures_filter.contract_size
+                        gross_funding = funding_payment(funding_notional, funding)
                         entry_fees = (spot_entry_notional * _d(self.config.spot_taker_fee_rate)
                                       + futures_entry_notional * _d(self.config.futures_taker_fee_rate))
                         exit_fees = (spot_exit_notional * _d(self.config.spot_taker_fee_rate)
                                      + futures_exit_notional * _d(self.config.futures_taker_fee_rate))
-                        slippage_cost = sum((x.quote_notional * x.slippage_bps / Decimal("10000")
-                                             for x in executions if x is not None), Decimal("0"))
+                        spot_mid = (spot_bid + spot_ask) / Decimal("2")
+                        futures_mid = (fut_bid + fut_ask) / Decimal("2")
+                        slippage_cost = four_leg_execution_shortfall_usdt(
+                            spot_buy, spot_sell, fut_sell, fut_buy, spot_mid, futures_mid)
                         if new_history:
                             self.store.save_funding_observations(symbol, new_history, now)
                         funding_obs = []
