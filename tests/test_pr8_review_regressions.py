@@ -185,30 +185,30 @@ def test_migration_rollback_and_retry_preserve_legacy_row(tmp_path, monkeypatch)
             );
             INSERT INTO funding_observations VALUES (1, 'ETHUSDT', 200, '0.002', 201, 'legacy');
         """)
-    original_connect = SQLiteMarketStore._connect
-    calls = {"count": 0}
+    original_connect = sqlite3.connect
+    failed = {"value": False}
 
-    class FailOnceConnection:
-        def __init__(self, conn):
-            self.conn = conn
+    class FailCopyConnection(sqlite3.Connection):
+        def execute(self, sql, parameters=()):
+            if "INSERT INTO funding_observations_v4" in sql and not failed["value"]:
+                failed["value"] = True
+                raise sqlite3.OperationalError("injected interrupted migration")
+            return super().execute(sql, parameters)
 
-        def __getattr__(self, name):
-            return getattr(self.conn, name)
+    def connect_with_failure(path, *args, **kwargs):
+        if str(path) == str(db):
+            kwargs["factory"] = FailCopyConnection
+        return original_connect(path, *args, **kwargs)
 
-    def fail_commit_once(self):
-        conn = original_connect(self)
-        calls["count"] += 1
-        if calls["count"] == 1:
-            class Proxy(FailOnceConnection):
-                def commit(self):
-                    raise sqlite3.OperationalError("injected interrupted migration")
-            return Proxy(conn)
-        return conn
-
-    monkeypatch.setattr(SQLiteMarketStore, "_connect", fail_commit_once)
-    with pytest.raises(sqlite3.OperationalError):
+    monkeypatch.setattr(sqlite3, "connect", connect_with_failure)
+    with pytest.raises(sqlite3.OperationalError, match="injected"):
         SQLiteMarketStore(str(db))
-    monkeypatch.setattr(SQLiteMarketStore, "_connect", original_connect)
+    monkeypatch.setattr(sqlite3, "connect", original_connect)
+
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        assert conn.execute("SELECT funding_rate FROM funding_observations").fetchone()[0] == "0.002"
+        assert conn.execute("SELECT name FROM sqlite_master WHERE name='funding_observations_v4'").fetchone() is None
     store = SQLiteMarketStore(str(db))
     assert store.funding_history("ETHUSDT")[0]["funding_rate"] == "0.002"
 
@@ -268,3 +268,36 @@ async def test_rate_limit_applies_shared_cooldown_without_retry_storm(status):
         assert calls["count"] == 1
     finally:
         await client.close()
+
+
+def test_scanner_merge_and_summary_deduplicate_source_only_repeat():
+    from app.services.market_scanner import _merge_funding_history
+
+    new_rows = [{
+        "fundingTime": BASE, "fundingRate": "0.0001", "markPrice": "50000",
+        "rateType": "Regular", "source": "primary",
+    }]
+    stored_rows = [{
+        "funding_time_ms": BASE, "funding_rate": "0.0001", "settlement_mark_price": "50000",
+        "rate_type": "Regular", "source": "backfill",
+    }]
+    merged = _merge_funding_history(new_rows, stored_rows)
+    assert len(merged) == 1
+    assert set(merged[0]["sources"]) == {"primary", "backfill"}
+    observations = [FundingObservation(
+        "BTCUSDT", Decimal(row["fundingRate"]), int(row["fundingTime"]),
+        Decimal(row["markPrice"]), row["rateType"], ",".join(row["sources"])
+    ) for row in merged]
+    assert summarize_funding(observations + observations)["count"] == 1
+
+
+def test_same_time_regular_and_special_are_separate_not_conflicting():
+    rows = regular_rows()
+    rows.append({**rows[0], "rateType": "Special", "fundingRate": "0.00003"})
+    result = assess_funding_history(
+        rows, interval_hours=8, next_funding_time_ms=rows[-1]["fundingTime"] + 8 * HOUR,
+        current_funding_rate="0.0001",
+    )
+    assert result["state"] == FUNDING_RATE_RECONCILED
+    assert result["regular_settlement_count"] == 3
+    assert result["special_event_count"] == 1
