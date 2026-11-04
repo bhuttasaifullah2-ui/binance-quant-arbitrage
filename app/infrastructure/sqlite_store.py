@@ -409,9 +409,12 @@ class SQLiteMarketStore:
     def funding_history_conflicts(self, symbol: str) -> list[dict[str, Any]]:
         """Report economic payload and ambiguous cross-source rateType conflicts."""
         with self._connect() as conn:
-            rows = conn.execute("""SELECT funding_time_ms,funding_rate,settlement_mark_price,
-                rate_type,source FROM funding_observations WHERE symbol=?
-                ORDER BY funding_time_ms DESC""", (symbol.upper(),)).fetchall()
+            rows = conn.execute("""SELECT f.funding_time_ms,f.funding_rate,f.settlement_mark_price,
+                f.rate_type,COALESCE(s.source,f.source) AS source
+                FROM funding_observations f
+                LEFT JOIN funding_observation_sources s ON s.funding_observation_id=f.id
+                WHERE f.symbol=? ORDER BY f.funding_time_ms DESC""",
+                (symbol.upper(),)).fetchall()
         variants: dict[tuple[int, str], set[tuple[str, str]]] = {}
         sources: dict[tuple[int, str], set[str]] = {}
         for row in rows:
