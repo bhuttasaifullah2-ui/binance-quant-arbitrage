@@ -424,3 +424,27 @@ def test_database_reports_cross_source_event_type_conflict(tmp_path):
     assert store.funding_history_conflicts("BTCUSDT") == [
         {"funding_time_ms": BASE, "record_count": 2}
     ]
+
+
+def test_migration_stops_if_backup_integrity_verification_fails(tmp_path, monkeypatch):
+    db = tmp_path / "backup-integrity.sqlite"
+    with sqlite3.connect(db) as conn:
+        conn.executescript("""
+            CREATE TABLE schema_version(version INTEGER NOT NULL);
+            INSERT INTO schema_version VALUES (3);
+            CREATE TABLE funding_observations (
+                id INTEGER PRIMARY KEY, symbol TEXT NOT NULL, funding_time_ms INTEGER NOT NULL,
+                funding_rate TEXT NOT NULL, observed_at_ms INTEGER NOT NULL, source TEXT NOT NULL
+            );
+            INSERT INTO funding_observations VALUES (1, 'BTCUSDT', 100, '0.001', 101, 'legacy');
+        """)
+
+    def reject_backup(self, conn, destination):
+        raise sqlite3.DatabaseError("injected backup integrity failure")
+
+    monkeypatch.setattr(SQLiteMarketStore, "_create_verified_backup", reject_backup)
+    with pytest.raises(sqlite3.DatabaseError, match="backup integrity"):
+        SQLiteMarketStore(str(db))
+    with sqlite3.connect(db) as conn:
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
+        assert conn.execute("SELECT funding_rate FROM funding_observations").fetchone()[0] == "0.001"
