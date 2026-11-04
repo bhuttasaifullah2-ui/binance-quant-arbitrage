@@ -33,6 +33,7 @@ def test_interval_resolution_authoritative_adjusted_and_missing_info():
 def test_normal_interval_and_invalid_funding_info():
     times = [row["fundingTime"] for row in _rows()]
     assert resolve_funding_interval({"fundingIntervalHours": 8}, times) == (8, "BINANCE_FUNDING_INFO")
+    assert resolve_funding_interval({"fundingIntervalHours": 1}, times)[0] == 1
     assert resolve_funding_interval({"fundingIntervalHours": 3}, times)[0] is None
 
 
@@ -99,6 +100,7 @@ def test_adjusted_rate_caps_and_base_quote_and_snapshot_skew():
     futures = {"symbol": "BTCUSDT", "baseAsset": "BTC", "quoteAsset": "USDT", "contractSize": "1"}
     assert compatible_spot_futures(spot, futures)
     assert not compatible_spot_futures(spot, {**futures, "baseAsset": "WBTC"})
+    assert not compatible_spot_futures(spot, {**futures, "quoteAsset": "BUSD"})
     assert snapshot_skew_is_acceptable(1000, 1500, 500)
     assert not snapshot_skew_is_acceptable(1000, 1501, 500)
 
