@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from collections import deque
 from typing import Any
 
 import httpx
@@ -13,7 +14,7 @@ class BinanceAPIError(RuntimeError):
 
 
 class FundingRequestBudget:
-    """Shared rolling-window request budget for fundingInfo and fundingRate."""
+    """Shared sliding-window request budget for fundingInfo and fundingRate."""
 
     def __init__(self, limit: int = 450, reserve_for_current: int = 50,
                  window_seconds: int = 300) -> None:
@@ -22,24 +23,21 @@ class FundingRequestBudget:
         self.limit = limit
         self.reserve_for_current = reserve_for_current
         self.window_seconds = window_seconds
-        self._window_start: float | None = None
-        self._total = 0
-        self._backfill = 0
+        self._requests: deque[tuple[float, str]] = deque()
 
     def try_acquire(self, priority: str = "current", *, now: float | None = None) -> bool:
         if priority not in {"current", "backfill"}:
             raise ValueError("priority must be current or backfill")
         current = time.monotonic() if now is None else now
-        if self._window_start is None or current - self._window_start >= self.window_seconds:
-            self._window_start = current
-            self._total = 0
-            self._backfill = 0
-        backfill_limit = self.limit - self.reserve_for_current
-        if self._total >= self.limit or (priority == "backfill" and self._backfill >= backfill_limit):
+        cutoff = current - self.window_seconds
+        while self._requests and self._requests[0][0] <= cutoff:
+            self._requests.popleft()
+        backfill_count = sum(1 for _, kind in self._requests if kind == "backfill")
+        if len(self._requests) >= self.limit or (
+            priority == "backfill" and backfill_count >= self.limit - self.reserve_for_current
+        ):
             raise RuntimeError("funding request budget exhausted; retry on a later scan")
-        self._total += 1
-        if priority == "backfill":
-            self._backfill += 1
+        self._requests.append((current, priority))
         return True
 
 
