@@ -44,7 +44,7 @@ Spot/Futures symbols must agree on explicit base and quote assets. USDⓈ-M cont
 
 ## Funding request budget
 
-A shared in-process rolling 5-minute budget limits combined fundingInfo/fundingRate calls to 450, leaving a 50-request reserve for current settlement retrieval. Historical backfills use a lower-priority allocation and cannot consume that reserve. Budget exhaustion defers work to a later scan. A 418/429 response immediately activates a shared cooldown for these endpoints instead of retrying concurrently and creating a retry storm. The budget is shared across symbols and repeated scans for the lifetime of the public client process.
+A shared in-process rolling 5-minute budget limits combined fundingInfo/fundingRate HTTP attempts to 450, leaving a 50-request reserve for current settlement retrieval. Historical backfills use a lower-priority allocation and cannot consume that reserve. Budget exhaustion defers work to a later scan. A 418/429 response immediately activates a shared cooldown for these endpoints instead of retrying concurrently and creating a retry storm. The budget is shared across symbols and repeated scans for the lifetime of the public client process.
 
 ## Safety
 
