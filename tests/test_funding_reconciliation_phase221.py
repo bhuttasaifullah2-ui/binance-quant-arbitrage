@@ -85,3 +85,46 @@ def test_funding_reconciliation_flags_current_vs_historical_mismatch(tmp_path):
     result = asyncio.run(service.validate_funding("BTCUSDT"))
     assert result["status"] == "WARNING"
     assert result["current_vs_latest_historical_match"] is False
+
+
+
+def test_funding_reconciliation_rejects_stale_latest_settlement_timestamp(tmp_path):
+    now = int(time.time() * 1000)
+    rows = [
+        {"fundingTime": now - 16 * 3600000, "fundingRate": "0.0001"},
+        {"fundingTime": now - 8 * 3600000, "fundingRate": "0.0001"},
+    ]
+    client = FundingClient(rows, [])
+    async def stale_next_funding():
+        return [{"symbol": "BTCUSDT", "lastFundingRate": "0.0001",
+                 "nextFundingTime": now + 3600000}]
+    client.futures_premium_index = stale_next_funding
+    service = LiveValidationService(client, Dummy(), Dummy(),
+                                    ValidationStore(str(tmp_path / "stale-settlement.sqlite3")))
+    result = asyncio.run(service.validate_funding("BTCUSDT"))
+    assert result["current_vs_latest_historical_match"] is True
+    assert result["latest_settlement_time_match"] is False
+    assert result["status"] == "WARNING"
+
+
+def test_funding_reconciliation_uses_exchange_interval_override(tmp_path):
+    now = int(time.time() * 1000)
+    rows = [
+        {"fundingTime": now - 2 * 3600000, "fundingRate": "0.0001"},
+        {"fundingTime": now - 1 * 3600000, "fundingRate": "0.0001"},
+    ]
+    client = FundingClient(rows, [])
+    async def one_hour_next_funding():
+        return [{"symbol": "BTCUSDT", "lastFundingRate": "0.0001",
+                 "nextFundingTime": int(rows[-1]["fundingTime"]) + 3600000 + 1000}]
+    async def one_hour_funding_info():
+        return [{"symbol": "BTCUSDT", "fundingIntervalHours": 1}]
+    client.futures_premium_index = one_hour_next_funding
+    client.futures_funding_info = one_hour_funding_info
+    service = LiveValidationService(client, Dummy(), Dummy(),
+                                    ValidationStore(str(tmp_path / "one-hour.sqlite3")))
+    result = asyncio.run(service.validate_funding("BTCUSDT"))
+    assert result["funding_interval_hours_estimate"] == 1
+    assert result["funding_interval_source"] == "BINANCE_FUNDING_INFO"
+    assert result["latest_settlement_time_match"] is True
+    assert result["status"] == "HEALTHY"
