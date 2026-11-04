@@ -12,9 +12,10 @@ class LiveValidationService:
                  websocket_probe_timeout: float = 5.0, max_reconnect_attempts: int = 10,
                  max_recovery_duration_ms: int = 60000,
                  max_processing_latency_ms: float = 100.0, max_stale_symbols: int = 5,
-                 market_store: Any | None = None) -> None:
+                 market_store: Any | None = None, websocket_probes_enabled: bool = False) -> None:
         self.client,self.hub,self.websocket_manager,self.store=client,hub,websocket_manager,store
         self.market_store = market_store
+        self.websocket_probes_enabled = websocket_probes_enabled
         self.max_clock_drift_ms=max_clock_drift_ms
         self.max_message_age_ms=max_message_age_ms
         self.websocket_probe_timeout=websocket_probe_timeout
@@ -85,13 +86,21 @@ class LiveValidationService:
           ("spot_orderbook",lambda:self.client.spot_depth("BTCUSDT",5)),
           ("futures_orderbook",lambda:self.client.futures_depth("BTCUSDT",5))]
         rows=await asyncio.gather(*(self._check(n,c) for n,c in checks))
-        spot_ws,futures_ws=await asyncio.gather(
-            self._ws_probe("spot_websocket","wss://stream.binance.com:9443/ws","btcusdt@bookTicker"),
-            self._ws_probe("futures_websocket","wss://fstream.binance.com/ws","btcusdt@bookTicker"))
-        for row in (spot_ws,futures_ws):
-            self.store.record("connectivity",row["name"],row["checked_at_ms"],row["status"],row)
-        self.connectivity={"checked_at_ms":int(time.time()*1000),"checks":rows+[spot_ws,futures_ws],
-            "status":"HEALTHY" if all(x["status"]=="HEALTHY" for x in rows+[spot_ws,futures_ws]) else "DEGRADED",
+        if self.websocket_probes_enabled:
+            spot_ws,futures_ws=await asyncio.gather(
+                self._ws_probe("spot_websocket","wss://stream.binance.com:9443/ws","btcusdt@bookTicker"),
+                self._ws_probe("futures_websocket","wss://fstream.binance.com/ws","btcusdt@bookTicker"))
+            websocket_checks=[spot_ws,futures_ws]
+            for row in websocket_checks:
+                self.store.record("connectivity",row["name"],row["checked_at_ms"],row["status"],row)
+        else:
+            websocket_checks=[{"name":name,"status":"DISABLED","message_received":False,
+                "checked_at_ms":int(time.time()*1000),"error":None}
+                for name in ("spot_websocket","futures_websocket")]
+        self.connectivity={"checked_at_ms":int(time.time()*1000),"checks":rows+websocket_checks,
+            "status":"HEALTHY" if all(x["status"]=="HEALTHY" for x in rows) and
+                     (not self.websocket_probes_enabled or all(x["status"]=="HEALTHY" for x in websocket_checks)) else "DEGRADED",
+            "websocket_probes":"ENABLED" if self.websocket_probes_enabled else "DISABLED",
             "authentication":"PUBLIC_UNAUTHENTICATED"}
         await self.check_clock()
         return self.connectivity
