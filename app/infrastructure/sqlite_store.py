@@ -167,24 +167,25 @@ class SQLiteMarketStore:
 
     @staticmethod
     def restore_from_backup(backup_path: str, database_path: str) -> "SQLiteMarketStore":
-        """Restore only into a new path; reject existing DBs and WAL/SHM sidecars."""
+        """Restore atomically to a new path; never overwrite a database or sidecar."""
         source_path, destination = Path(backup_path), Path(database_path)
         if source_path.resolve() == destination.resolve():
             raise ValueError("backup and restore paths must differ")
-        sidecars = (Path(f"{destination}-wal"), Path(f"{destination}-shm"))
+        sidecars = (Path(f"{destination}-wal"), Path(f"{destination}-shm"),
+                    Path(f"{destination}-journal"))
         if destination.exists() or any(path.exists() for path in sidecars):
-            raise FileExistsError("restore destination or SQLite WAL/SHM sidecar already exists")
+            raise FileExistsError("restore destination or SQLite sidecar already exists")
         source = sqlite3.connect(source_path)
-        descriptor = None
+        temp_path = destination.with_name(f"{destination.name}.restore.{uuid.uuid4().hex}.tmp")
+        linked = False
         try:
             integrity = source.execute("PRAGMA integrity_check").fetchone()
             if integrity is None or integrity[0] != "ok":
                 raise sqlite3.DatabaseError("backup failed SQLite integrity_check")
             destination.parent.mkdir(parents=True, exist_ok=True)
-            descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            descriptor = os.open(temp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             os.close(descriptor)
-            descriptor = None
-            target = sqlite3.connect(destination)
+            target = sqlite3.connect(temp_path)
             try:
                 source.backup(target)
                 restored_integrity = target.execute("PRAGMA integrity_check").fetchone()
@@ -192,13 +193,19 @@ class SQLiteMarketStore:
                     raise sqlite3.DatabaseError("restored database failed SQLite integrity_check")
             finally:
                 target.close()
+            # Hard-link installation is atomic and fails rather than replacing a
+            # destination created by another process during the restore.
+            os.link(temp_path, destination)
+            linked = True
         except Exception:
-            destination.unlink(missing_ok=True)
+            if linked:
+                destination.unlink(missing_ok=True)
             for sidecar in sidecars:
                 sidecar.unlink(missing_ok=True)
             raise
         finally:
             source.close()
+            temp_path.unlink(missing_ok=True)
         return SQLiteMarketStore(str(destination))
 
     def save_observation(self, row: dict[str, Any]) -> bool:
