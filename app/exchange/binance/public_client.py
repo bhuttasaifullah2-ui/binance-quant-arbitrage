@@ -88,7 +88,8 @@ class BinancePublicClient:
             raise BinanceAPIError("funding endpoints in shared cooldown after Binance rate limit")
         self.funding_request_budget.try_acquire(priority)
 
-    async def _get(self, market: str, path: str, params: dict[str, Any] | None = None) -> Any:
+    async def _get(self, market: str, path: str, params: dict[str, Any] | None = None,
+                   funding_priority: str = "current") -> Any:
         base = self.spot_base_url if market == "spot" else self.futures_base_url
         if self._client is None:
             self._client = httpx.AsyncClient(
@@ -99,6 +100,8 @@ class BinancePublicClient:
         is_funding_endpoint = path in {"/fapi/v1/fundingInfo", "/fapi/v1/fundingRate"}
         async with self._semaphore:
             for attempt in range(self.max_retries + 1):
+                if is_funding_endpoint:
+                    await self.acquire_funding_request(funding_priority)
                 try:
                     response = await self._client.get(url, params=params)
                     if response.status_code in (418, 429):
@@ -168,8 +171,7 @@ class BinancePublicClient:
         return await self._get("futures", "/fapi/v1/premiumIndex")
 
     async def futures_funding_info(self) -> list[dict[str, Any]]:
-        await self.acquire_funding_request("current")
-        return await self._get("futures", "/fapi/v1/fundingInfo")
+        return await self._get("futures", "/fapi/v1/fundingInfo", funding_priority="current")
 
     async def futures_funding_history(self, symbol: str, limit: int = 100,
                                       start_time_ms: int | None = None,
@@ -177,13 +179,13 @@ class BinancePublicClient:
                                       priority: str = "current") -> list[dict[str, Any]]:
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
-        await self.acquire_funding_request(priority)
         params: dict[str, Any] = {"symbol": symbol, "limit": limit}
         if start_time_ms is not None:
             params["startTime"] = start_time_ms
         if end_time_ms is not None:
             params["endTime"] = end_time_ms
-        return await self._get("futures", "/fapi/v1/fundingRate", params)
+        return await self._get("futures", "/fapi/v1/fundingRate", params,
+                               funding_priority=priority)
 
     async def futures_depth(self, symbol: str, limit: int = 20) -> dict[str, Any]:
         return await self._get("futures", "/fapi/v1/depth", {"symbol": symbol, "limit": limit})
