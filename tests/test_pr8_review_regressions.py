@@ -11,6 +11,7 @@ from app.domain.funding import (
 from app.domain.funding_integrity import (
     FUNDING_RATE_RECONCILED,
     HISTORY_INCOMPLETE,
+    HISTORY_RECONCILIATION_FAILED,
     assess_funding_history,
     snapshot_fields_are_acceptable,
     deduplicate_economic_settlements,
@@ -398,3 +399,14 @@ async def test_staggered_rest_endpoint_responses_get_independent_midpoints(monke
     assert spot_midpoint == 1050
     assert futures_midpoint == 1900
     assert abs(spot_midpoint - futures_midpoint) > 500
+
+
+def test_cross_source_rate_type_disagreement_blocks_reconciliation():
+    rows = regular_rows()
+    rows[-1]["source"] = "primary"
+    rows.append({**rows[-1], "rateType": "Special", "source": "independent-backfill"})
+    result = assess_funding_history(
+        rows, interval_hours=8, next_funding_time_ms=rows[-1]["fundingTime"] + 8 * HOUR,
+        current_funding_rate="0.0001",
+    )
+    assert result["state"] == HISTORY_RECONCILIATION_FAILED
