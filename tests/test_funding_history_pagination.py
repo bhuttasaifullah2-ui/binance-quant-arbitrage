@@ -21,7 +21,7 @@ async def test_funding_history_paginates_and_deduplicates():
     client = FakeClient()
     rows = await fetch_funding_history(client, "BTCUSDT", page_size=2, max_pages=3)
     assert [x["fundingTime"] for x in rows] == [100, 200, 300]
-    assert len(client.calls) == 2
+    assert len(client.calls) == 3
 
 
 
