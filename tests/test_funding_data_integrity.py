@@ -59,7 +59,7 @@ def test_history_reconciles_timestamp_rate_and_settlement_mark():
     assert result["state"] == FUNDING_RATE_RECONCILED
     assert result["settlement_mark_price"] == "50200"
     assert result["cashflow_valuation"] == "SETTLEMENT_MARK_PRICE"
-    no_mark = [{k: v for k, v in rows[-1].items() if k != "markPrice"}]
+    no_mark = [{k: v for k, v in row.items() if k != "markPrice"} for row in rows]
     no_mark_result = assess_funding_history(
         no_mark, interval_hours=8, next_funding_time_ms=next_time,
         current_funding_rate="0.0003"
