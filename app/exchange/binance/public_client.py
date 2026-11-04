@@ -170,9 +170,11 @@ class BinancePublicClient:
 
     async def futures_funding_history(self, symbol: str, limit: int = 100,
                                       start_time_ms: int | None = None,
-                                      end_time_ms: int | None = None) -> list[dict[str, Any]]:
+                                      end_time_ms: int | None = None,
+                                      priority: str = "current") -> list[dict[str, Any]]:
         if not 1 <= limit <= 1000:
             raise ValueError("limit must be between 1 and 1000")
+        await self.acquire_funding_request(priority)
         params: dict[str, Any] = {"symbol": symbol, "limit": limit}
         if start_time_ms is not None:
             params["startTime"] = start_time_ms
