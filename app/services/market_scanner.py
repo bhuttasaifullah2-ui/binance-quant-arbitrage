@@ -605,6 +605,10 @@ class MarketScanner:
                             "funding_info_available": funding_info is not None,
                             "funding_info_fetch_error": self._funding_info_error,
                             "settlement_mark_price": funding_state.get("settlement_mark_price"),
+                            "funding_history_coverage_start_ms": funding_state.get("coverage_start_ms"),
+                            "funding_history_coverage_end_ms": funding_state.get("coverage_end_ms"),
+                            "funding_history_settlement_count": funding_state.get("settlement_count"),
+                            "funding_history_coverage_note": "BOUNDED_STORED_WINDOW; OLDER_HISTORY_NOT_ASSERTED",
                             "realized_settlement_cashflow_for_current_quantity_usdt": (
                                 str(linear_futures_funding_notional(
                                     hedge["futures_quantity"], futures_filter.contract_size,
