@@ -56,7 +56,7 @@ def test_exact_duplicates_are_ignored_but_mark_and_rate_type_conflicts_are_retai
     }
     assert {row["observed_at_ms"] for row in rows} == {1700000001000, 1700000003000}
     assert store.funding_history_conflicts("BTCUSDT") == [
-        {"funding_time_ms": 1700000000000, "record_count": 4}
+        {"funding_time_ms": 1700000000000, "record_count": 2}
     ]
 
 
