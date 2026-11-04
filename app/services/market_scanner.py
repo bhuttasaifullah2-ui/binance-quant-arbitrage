@@ -65,6 +65,7 @@ class MarketScanner:
         self._eligibility_decisions: dict[str, dict[str, Any]] = {}
         self.observation_store: Any | None = None
         self._ws_bootstrap_done = False
+        self._snapshot_skew_by_symbol: dict[str, int] = {}
 
     @property
     def opportunities(self) -> list[dict[str, Any]]:
@@ -167,10 +168,15 @@ class MarketScanner:
                              ("futures_bid", "futures_ask", "futures_last", "futures_quote_volume",
                               "futures_mark", "futures_index", "funding_rate", "next_funding_time_ms")
                              if name in state.fields]
-            if (not spot_times or not futures_times or
-                    not snapshot_skew_is_acceptable(max(spot_times), max(futures_times),
-                                                    getattr(self.config, "max_clock_skew_ms", 5000))):
-                self._reject(symbol, "Spot/Futures WebSocket snapshot timestamps diverge or are unavailable",
+            if not spot_times or not futures_times:
+                self._reject(symbol, "Spot/Futures WebSocket snapshot timestamps are unavailable",
+                             now, "MARKET_SNAPSHOT_SKEW_TOO_HIGH")
+                continue
+            symbol_skew_ms = abs(max(spot_times) - max(futures_times))
+            self._snapshot_skew_by_symbol[symbol] = symbol_skew_ms
+            if not snapshot_skew_is_acceptable(max(spot_times), max(futures_times),
+                                               getattr(self.config, "max_clock_skew_ms", 5000)):
+                self._reject(symbol, "Spot/Futures WebSocket snapshot timestamps diverge",
                              now, "MARKET_SNAPSHOT_SKEW_TOO_HIGH")
                 continue
             spot_t[symbol] = {"lastPrice": snap["spot_last"], "quoteVolume": snap["spot_quote_volume"]}
@@ -188,6 +194,7 @@ class MarketScanner:
             started = int(time.time() * 1000)
             self._rejections = []
             self._eligibility_decisions = {}
+            self._snapshot_skew_by_symbol = {}
             try:
                 spot_info, fut_info = await self._metadata(started)
                 # fundingInfo only lists symbols with adjusted funding parameters.
@@ -622,7 +629,8 @@ class MarketScanner:
                                 "HISTORICAL_SETTLEMENT_MARK_FOR_HYPOTHETICAL_CURRENT_QUANTITY"
                                 if funding_state.get("settlement_mark_price") is not None
                                 else "UNAVAILABLE_ESTIMATE_ONLY"),
-                            "spot_futures_snapshot_skew_ms": snapshot_skew_ms,
+                            "spot_futures_snapshot_skew_ms": self._snapshot_skew_by_symbol.get(
+                                symbol, snapshot_skew_ms),
                             "next_funding_time_ms": next_funding, "funding_interval_hours": funding_interval,
                             "spot_price": str(spot_buy.vwap), "futures_mark": str(mark),
                             "entry_spot_vwap": str(spot_buy.vwap), "entry_futures_vwap": str(fut_sell.vwap),
