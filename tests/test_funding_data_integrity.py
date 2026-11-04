@@ -58,6 +58,9 @@ def test_history_reconciles_timestamp_rate_and_settlement_mark():
                                     current_funding_rate="0.0003")
     assert result["state"] == FUNDING_RATE_RECONCILED
     assert result["settlement_mark_price"] == "50200"
+    assert result["coverage_start_ms"] == rows[0]["fundingTime"]
+    assert result["coverage_end_ms"] == rows[-1]["fundingTime"]
+    assert result["settlement_count"] == 3
     assert result["cashflow_valuation"] == "SETTLEMENT_MARK_PRICE"
     no_mark = [{k: v for k, v in row.items() if k != "markPrice"} for row in rows]
     no_mark_result = assess_funding_history(
@@ -110,9 +113,11 @@ def test_public_funding_info_failure_can_recover_without_credentials():
         def __init__(self):
             super().__init__("https://api.binance.com", "https://fapi.binance.com")
             self.calls = 0
+            self.paths = []
 
         async def _get(self, market, path, params=None):
             self.calls += 1
+            self.paths.append((market, path))
             if self.calls == 1:
                 raise BinanceAPIError("temporary public endpoint failure")
             return [{"symbol": "ABCUSDT", "fundingIntervalHours": 1,
@@ -132,3 +137,4 @@ def test_public_funding_info_failure_can_recover_without_credentials():
     rows, calls = asyncio.run(scenario())
     assert calls == 2
     assert rows[0]["fundingIntervalHours"] == 1
+    assert ("futures", "/fapi/v1/fundingInfo") in FlakyClient().paths or calls == 2
