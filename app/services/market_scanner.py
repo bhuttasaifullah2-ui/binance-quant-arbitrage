@@ -278,7 +278,9 @@ class MarketScanner:
                                                     spot_filter, futures_filter,
                                                     _d(self.config.max_hedge_mismatch))
                         if not hedge["executable"]:
-                            self._reject(symbol, ";".join(hedge["reasons"]), now); continue
+                            self._reject(symbol, ";".join(hedge["reasons"]), now,
+                                         "HEDGE_FILTER_VALIDATION_FAILED")
+                            continue
                         spot_buy = estimate_vwap_quantity(sd["asks"], hedge["spot_quantity"], "buy")
                         spot_sell = estimate_vwap_quantity(sd["bids"], hedge["spot_quantity"], "sell")
                         fut_sell = estimate_vwap_quantity(fd["bids"], hedge["futures_quantity"], "sell")
@@ -395,8 +397,16 @@ class MarketScanner:
                             residual_exposure_usdt=hedge["residual_directional_exposure"],
                             max_residual_exposure_usdt=matched_notional*_d(self.config.max_hedge_mismatch))
                         score = score_factors["score"]
-                        if next_funding <= now or stats["count"] == 0 or net <= _d(self.config.min_net_edge_usdt):
-                            self._reject(symbol, "funding history absent/expired or estimated net edge below threshold", now); continue
+                        if next_funding <= now:
+                            self._reject(symbol, "next funding timestamp is expired", now, "FUNDING_TIMESTAMP_INVALID")
+                            continue
+                        if stats["count"] == 0:
+                            self._reject(symbol, "no usable realized funding observations", now, "FUNDING_HISTORY_MISSING")
+                            continue
+                        if net <= _d(self.config.min_net_edge_usdt):
+                            self._reject(symbol, "estimated net edge does not exceed configured minimum",
+                                         now, "NET_EDGE_INSUFFICIENT")
+                            continue
                         # All candidate opportunities pass this one final, shared gate.
                         state = self.market_hub.states.get(symbol) if self.market_hub else None
                         required_fields = ("spot_bid", "spot_ask", "spot_last", "spot_quote_volume",
@@ -476,7 +486,7 @@ class MarketScanner:
                                "futures_slippage_bps": fut_sell.slippage_bps + fut_buy.slippage_bps,
                                "basis_bps": bps, "observed_at_ms": now, "source": data_source}
                         self.store.save_observation(row)
-                        break_even = (entry_fees + exit_fees + slippage_cost + basis_penalty) / matched_notional
+                        break_even = (entry_fees + exit_fees + slippage_cost + basis_penalty) / funding_notional
                         out.append({
                             "symbol": symbol, "score": str(score), "funding_rate": str(funding),
                             "funding_history": {k: str(v) for k, v in stats.items()},
@@ -503,9 +513,13 @@ class MarketScanner:
                             "break_even_funding_rate": str(break_even),
                             "expected_holding_period_return_pct": str(net/matched_notional*100),
                             "holding_period_assumption": "one next funding interval",
+                            "funding_notional_usdt": str(funding_notional),
                             "gross_funding_usdt": str(gross_funding),
                             "estimated_fees_usdt": str(entry_fees + exit_fees),
                             "estimated_slippage_cost_usdt": str(slippage_cost),
+                            "estimated_spread_and_impact_cost_usdt": str(slippage_cost),
+                            "expected_latest_settlement_ms": expected_latest_settlement_ms,
+                            "latest_settlement_time_match": settlement_time_consistent,
                             "estimated_net_usdt": str(net), "status": "ESTIMATED_NOT_REALIZED",
                             "data_freshness": "FRESH", "max_field_age_ms": age_ms,
                             "field_timestamps_ms": ({} if not self.market_hub or not ws_ready else {
