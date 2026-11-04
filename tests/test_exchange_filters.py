@@ -4,6 +4,7 @@ from app.domain.exchange_filters import SymbolFilters, matched_valid_hedge
 
 def _meta(symbol="BTCUSDT", market=True):
     return {"symbol": symbol, "status": "TRADING", "baseAsset": "BTC", "quoteAsset": "USDT",
+            "marginAsset": "USDT", "contractType": "PERPETUAL",
             "filters": [
                 {"filterType": "PRICE_FILTER", "minPrice": "0.01", "maxPrice": "1000000", "tickSize": "0.01"},
                 {"filterType": "LOT_SIZE", "minQty": "0.001", "maxQty": "100", "stepSize": "0.001"},
