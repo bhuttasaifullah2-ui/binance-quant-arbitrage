@@ -125,7 +125,7 @@ def assess_funding_history(
         )
     conflicts = {stamp for (stamp, _), values in variants.items() if len(values) > 1}
     event_types_by_time: dict[int, set[str]] = {}
-    for stamp, event_type, _ in sources_by_event:
+    for stamp, event_type in sources_by_event:
         event_types_by_time.setdefault(stamp, set()).add(event_type)
     for stamp, event_types in event_types_by_time.items():
         if len(event_types) > 1:
