@@ -78,7 +78,7 @@ class SQLiteMarketStore:
                 "PRAGMA table_info(funding_observations)").fetchall()}
             current_version = 0 if row is None else int(row["version"])
             needs_rebuild = "settlement_mark_price" not in columns or "rate_type" not in columns
-            if current_version < SCHEMA_VERSION or needs_rebuild:
+            if (row is not None and current_version < SCHEMA_VERSION) or needs_rebuild:
                 backup_path = Path(f"{self.path}.pre_v4.bak")
                 if not backup_path.exists():
                     backup = sqlite3.connect(backup_path)
