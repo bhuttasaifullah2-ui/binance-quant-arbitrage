@@ -27,6 +27,8 @@ class SymbolFilters:
     apply_min_notional_to_market: bool
     apply_max_notional_to_market: bool
     contract_size: Decimal = Decimal("1")
+    margin_asset: str = ""
+    contract_type: str = ""
 
     @classmethod
     def from_exchange_info(cls, symbol_info: dict[str, Any], market: str) -> "SymbolFilters":
@@ -61,6 +63,8 @@ class SymbolFilters:
             apply_min_notional_to_market=bool(apply_min),
             apply_max_notional_to_market=bool(notional.get("applyMaxToMarket", True)),
             contract_size=Decimal(str(symbol_info.get("contractSize", "1"))),
+            margin_asset=str(symbol_info.get("marginAsset", "")),
+            contract_type=str(symbol_info.get("contractType", "")),
         )
 
     def round_quantity(self, quantity: Decimal, market_order: bool = True) -> Decimal:
@@ -123,6 +127,10 @@ def matched_valid_hedge(notional: Decimal, spot_price: Decimal, futures_price: D
         compatibility_reasons.append("Spot and Futures base assets do not match")
     if not spot.quote_asset or spot.quote_asset != futures.quote_asset:
         compatibility_reasons.append("Spot and Futures quote assets do not match")
+    if futures.margin_asset != futures.quote_asset:
+        compatibility_reasons.append("USD-M Futures margin asset does not match the hedge quote asset")
+    if futures.contract_type != "PERPETUAL":
+        compatibility_reasons.append("Futures contract is not a perpetual contract")
     spot_qty = spot.round_quantity(notional / spot_price)
     futures_qty = futures.round_quantity(notional / (futures_price * futures.contract_size))
     spot_reasons = spot.validate(spot_qty, spot_price)
