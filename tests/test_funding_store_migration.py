@@ -29,7 +29,12 @@ def test_v3_funding_migration_preserves_legacy_record_and_creates_backup(tmp_pat
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 4
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    assert (tmp_path / "legacy.sqlite3.pre_v4.bak").exists()
+    backup = tmp_path / "legacy.sqlite3.pre_v4.bak"
+    assert backup.exists()
+    restored = SQLiteMarketStore.restore_from_backup(
+        str(backup), str(tmp_path / "restored-from-pre-v4.sqlite3")
+    )
+    assert restored.funding_history("BTCUSDT")[0]["source"] == "legacy"
 
 
 def test_exact_duplicates_are_ignored_but_mark_and_rate_type_conflicts_are_retained(tmp_path):
@@ -38,15 +43,20 @@ def test_exact_duplicates_are_ignored_but_mark_and_rate_type_conflicts_are_retai
                "markPrice": "50000", "rateType": "Regular"}
     special = {**regular, "rateType": "Special"}
     changed_mark = {**regular, "markPrice": "50001"}
+    changed_source = {**regular, "source": "binance_fapi_fundingRate_backfill"}
     assert store.save_funding_observations("BTCUSDT", [regular], 1700000001000) == 1
     assert store.save_funding_observations("BTCUSDT", [regular], 1700000002000) == 0
-    assert store.save_funding_observations("BTCUSDT", [special, changed_mark], 1700000003000) == 2
+    assert store.save_funding_observations("BTCUSDT", [special, changed_mark, changed_source], 1700000003000) == 3
     rows = store.funding_history("BTCUSDT")
-    assert len(rows) == 3
+    assert len(rows) == 4
     assert {row["rate_type"] for row in rows} == {"Regular", "Special"}
     assert {row["settlement_mark_price"] for row in rows} == {"50000", "50001"}
+    assert {row["source"] for row in rows} == {
+        "binance_fapi_fundingRate", "binance_fapi_fundingRate_backfill"
+    }
+    assert {row["observed_at_ms"] for row in rows} == {1700000001000, 1700000003000}
     assert store.funding_history_conflicts("BTCUSDT") == [
-        {"funding_time_ms": 1700000000000, "record_count": 3}
+        {"funding_time_ms": 1700000000000, "record_count": 4}
     ]
 
 
