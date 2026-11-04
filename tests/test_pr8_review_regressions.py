@@ -482,3 +482,13 @@ def test_historical_cashflow_uses_settlement_mark_and_missing_mark_is_unavailabl
     assert historical_settlement_cashflow_for_short(
         quantity, multiplier, None, rate
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_malformed_funding_page_fails_closed():
+    class MalformedClient:
+        async def futures_funding_history(self, symbol, limit, start_time_ms=None, end_time_ms=None):
+            return [{"fundingTime": 100, "fundingRate": "0.001"}, {"unexpected": "row"}]
+
+    with pytest.raises(FundingHistoryPaginationError, match="malformed"):
+        await fetch_funding_history_with_stats(MalformedClient(), "BTCUSDT", page_size=2)
