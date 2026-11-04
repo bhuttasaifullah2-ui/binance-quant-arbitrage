@@ -123,6 +123,7 @@ class MarketScanner:
                     "futures_bid": fb.get("bidPrice"), "futures_ask": fb.get("askPrice"),
                     "futures_last": ft.get("lastPrice"), "futures_quote_volume": ft.get("quoteVolume"),
                     "futures_mark": pi.get("markPrice"), "futures_index": pi.get("indexPrice"),
+                    "futures_premium_time_ms": pi.get("time"),
                     "funding_rate": pi.get("lastFundingRate"),
                     "next_funding_time_ms": (int(pi["nextFundingTime"]) - self.market_hub.clock_offsets_ms.get("futures", 0)
                                              if pi.get("nextFundingTime") is not None else None)}, now, now)
@@ -149,6 +150,7 @@ class MarketScanner:
             fut_t[symbol] = {"lastPrice": snap["futures_last"], "quoteVolume": snap["futures_quote_volume"]}
             fut_b[symbol] = {"bidPrice": snap["futures_bid"], "askPrice": snap["futures_ask"]}
             prem[symbol] = {"markPrice": snap["futures_mark"], "indexPrice": snap["futures_index"],
+                            "time": snap.get("futures_premium_time_ms"),
                             "lastFundingRate": snap["funding_rate"],
                             "nextFundingTime": snap["next_funding_time_ms"]}
         return spot_t, spot_b, fut_t, fut_b, prem
@@ -416,8 +418,15 @@ class MarketScanner:
                             quality = state.freshness(now, self.config.max_data_age_seconds*1000, required_fields)
                             field_ages = quality["ages_ms"]
                             funding_field = state.fields.get("funding_rate")
-                            funding_source_time_ms = (None if funding_field is None
-                                                      else int(funding_field.event_time_ms))
+                            if funding_field is None:
+                                funding_source_time_ms = None
+                            elif funding_field.source == "websocket":
+                                funding_source_time_ms = int(funding_field.event_time_ms)
+                            else:
+                                raw_funding_time = pi.get("time")
+                                funding_source_time_ms = (int(raw_funding_time) -
+                                    (self.market_hub.clock_offsets_ms.get("futures", 0)
+                                     if self.market_hub else 0)) if raw_funding_time is not None else int(funding_field.event_time_ms)
                             funding_age = (None if funding_source_time_ms is None
                                            else max(0, now-funding_source_time_ms))
                         else:
