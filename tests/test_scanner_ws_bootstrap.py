@@ -22,6 +22,8 @@ class FakeClient:
         return []
     async def futures_premium_index(self):
         return []
+    async def futures_funding_info(self):
+        return []
     async def close(self):
         pass
 
