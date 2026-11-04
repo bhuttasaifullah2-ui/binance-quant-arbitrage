@@ -426,10 +426,27 @@ class MarketScanner:
                             quality = state.freshness(now, self.config.max_data_age_seconds*1000, required_fields)
                             field_ages = quality["ages_ms"]
                             funding_field = state.fields.get("funding_rate")
-                            funding_age = None if funding_field is None else max(0, now-funding_field.received_at_ms)
+                            if funding_field is None:
+                                funding_source_time_ms = None
+                            elif funding_field.source == "websocket":
+                                funding_source_time_ms = int(funding_field.event_time_ms)
+                            else:
+                                raw_funding_time = pi.get("time")
+                                funding_source_time_ms = (None if raw_funding_time is None else
+                                    int(raw_funding_time) -
+                                    (self.market_hub.clock_offsets_ms.get("futures", 0)
+                                     if self.market_hub else 0))
+                            funding_age = (None if funding_source_time_ms is None
+                                           else max(0, now-funding_source_time_ms))
                         else:
                             field_ages = {name: max(0, now-(rest_snapshot_ms or now)) for name in required_fields}
-                            funding_age = max(0, now-(rest_snapshot_ms or now))
+                            raw_funding_time = pi.get("time")
+                            funding_source_time_ms = (None if raw_funding_time is None else
+                                int(raw_funding_time) -
+                                (self.market_hub.clock_offsets_ms.get("futures", 0)
+                                 if self.market_hub else 0))
+                            funding_age = (None if funding_source_time_ms is None
+                                           else max(0, now-funding_source_time_ms))
                             quality = {"valid": bool(rest_snapshot_ms), "reasons": [] if rest_snapshot_ms else ["missing REST snapshot"]}
                         ws_feeds = {}
                         if self.config.websocket_enabled:
@@ -502,6 +519,7 @@ class MarketScanner:
                         out.append({
                             "symbol": symbol, "score": str(score), "funding_rate": str(funding),
                             "funding_rate_assumption": "LATEST_REALIZED_RATE_CARRIED_FORWARD_NOT_A_FORECAST",
+                            "funding_source_time_ms": funding_source_time_ms,
                             "funding_notional_usdt": str(funding_notional),
                             "funding_valuation_method": "CURRENT_MARK_PRICE_PROXY; FUTURE_SETTLEMENT_MARK_UNKNOWN",
                             "funding_history": {k: str(v) for k, v in stats.items()},
