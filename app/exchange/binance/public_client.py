@@ -66,6 +66,7 @@ class BinancePublicClient:
             funding_request_limit, funding_current_reserve, 300
         )
         self._funding_cooldown_until = 0.0
+        self._global_cooldown_until = 0.0
 
     async def __aenter__(self) -> "BinancePublicClient":
         self._client = httpx.AsyncClient(
@@ -84,6 +85,8 @@ class BinancePublicClient:
 
     async def acquire_funding_request(self, priority: str = "current") -> None:
         now = time.monotonic()
+        if now < self._global_cooldown_until:
+            raise BinanceAPIError("Binance public endpoints in shared IP cooldown after HTTP 418")
         if now < self._funding_cooldown_until:
             raise BinanceAPIError("funding endpoints in shared cooldown after Binance rate limit")
         self.funding_request_budget.try_acquire(priority)
@@ -100,6 +103,8 @@ class BinancePublicClient:
         is_funding_endpoint = path in {"/fapi/v1/fundingInfo", "/fapi/v1/fundingRate"}
         async with self._semaphore:
             for attempt in range(self.max_retries + 1):
+                if time.monotonic() < self._global_cooldown_until:
+                    raise BinanceAPIError("Binance public endpoints in shared IP cooldown after HTTP 418")
                 if is_funding_endpoint:
                     await self.acquire_funding_request(funding_priority)
                 try:
@@ -111,13 +116,21 @@ class BinancePublicClient:
                             ))
                         except ValueError:
                             retry_after = 60.0 if response.status_code == 418 else 1.0
+                        if response.status_code == 418:
+                            self._global_cooldown_until = max(
+                                self._global_cooldown_until,
+                                time.monotonic() + max(1.0, retry_after),
+                            )
+                            raise BinanceAPIError(
+                                "Binance IP ban response 418; shared public-endpoint cooldown applied"
+                            )
                         if is_funding_endpoint:
                             self._funding_cooldown_until = max(
                                 self._funding_cooldown_until,
                                 time.monotonic() + max(1.0, retry_after),
                             )
                             raise BinanceAPIError(
-                                f"Binance funding rate limit {response.status_code}; shared cooldown applied"
+                                "Binance funding rate limit 429; shared funding cooldown applied"
                             )
                         if attempt >= self.max_retries:
                             raise BinanceAPIError(
