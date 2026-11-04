@@ -344,3 +344,19 @@ def test_funding_budget_uses_sliding_not_fixed_window():
     with pytest.raises(RuntimeError, match="budget"):
         budget.try_acquire("current", now=299)
     assert budget.try_acquire("backfill", now=301)
+
+
+def test_restore_rejects_missing_and_empty_sqlite_backup(tmp_path):
+    missing = tmp_path / "missing.sqlite"
+    destination = tmp_path / "missing-restore.sqlite"
+    with pytest.raises(FileNotFoundError):
+        SQLiteMarketStore.restore_from_backup(str(missing), str(destination))
+    assert not missing.exists()
+    assert not destination.exists()
+
+    empty = tmp_path / "empty.sqlite"
+    with sqlite3.connect(empty):
+        pass
+    with pytest.raises(sqlite3.DatabaseError, match="expected market-store tables"):
+        SQLiteMarketStore.restore_from_backup(str(empty), str(destination))
+    assert not destination.exists()
