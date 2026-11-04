@@ -3,7 +3,7 @@ import sqlite3
 from app.infrastructure.sqlite_store import SQLiteMarketStore
 
 
-def test_v3_funding_migration_preserves_legacy_record_and_creates_backup(tmp_path):
+def test_v3_funding_migration_preserves_legacy_record_and_creates_verified_backup(tmp_path):
     database = tmp_path / "legacy.sqlite3"
     with sqlite3.connect(database) as conn:
         conn.executescript("""
@@ -26,20 +26,51 @@ def test_v3_funding_migration_preserves_legacy_record_and_creates_backup(tmp_pat
     assert history[0]["settlement_mark_price"] is None
     assert history[0]["rate_type"] is None
     assert history[0]["source"] == "legacy"
+    assert history[0]["sources"] == ["legacy"]
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 5
-    backup = next(tmp_path.glob("no-version.sqlite.pre_v5.*.bak"))
-    restored = SQLiteMarketStore.restore_from_backup(
-        str(backup), str(tmp_path / "restored-legacy-no-version.sqlite")
-    )
-    assert restored.funding_history("SOLUSDT")[0]["funding_rate"] == "0.0003"
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     backup = next(tmp_path.glob("legacy.sqlite3.pre_v5.*.bak"))
-    assert backup.exists()
+    with sqlite3.connect(backup) as conn:
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
     restored = SQLiteMarketStore.restore_from_backup(
-        str(backup), str(tmp_path / "restored-from-pre-v4.sqlite3")
+        str(backup), str(tmp_path / "restored-from-pre-v5.sqlite3")
     )
     assert restored.funding_history("BTCUSDT")[0]["source"] == "legacy"
+
+
+def test_v4_migration_collapses_source_duplicates_but_preserves_provenance_and_conflicts(tmp_path):
+    database = tmp_path / "v4.sqlite3"
+    with sqlite3.connect(database) as conn:
+        conn.executescript("""
+            CREATE TABLE schema_version(version INTEGER NOT NULL);
+            INSERT INTO schema_version VALUES (4);
+            CREATE TABLE funding_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL,
+                funding_time_ms INTEGER NOT NULL, funding_rate TEXT NOT NULL,
+                settlement_mark_price TEXT, rate_type TEXT, observed_at_ms INTEGER NOT NULL,
+                source TEXT NOT NULL
+            );
+            INSERT INTO funding_observations VALUES
+                (1,'BTCUSDT',100,'0.001','50000','Regular',101,'primary'),
+                (2,'BTCUSDT',100,'0.001','50000','Regular',102,'backfill'),
+                (3,'BTCUSDT',100,'0.001','50001','Regular',103,'primary'),
+                (4,'BTCUSDT',100,'0.002','50000','Special',104,'special-feed');
+        """)
+    store = SQLiteMarketStore(str(database))
+    rows = store.funding_history("BTCUSDT")
+    assert len(rows) == 3
+    regular_same_payload = next(
+        row for row in rows
+        if row["rate_type"] == "Regular" and row["settlement_mark_price"] == "50000"
+    )
+    assert set(regular_same_payload["sources"]) == {"primary", "backfill"}
+    assert store.funding_history_conflicts("BTCUSDT") == [
+        {"funding_time_ms": 100, "record_count": 2}
+    ]
+    with sqlite3.connect(database) as conn:
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 5
+        assert conn.execute("SELECT COUNT(*) FROM funding_observation_sources").fetchone()[0] == 4
 
 
 def test_exact_duplicates_are_ignored_but_mark_and_rate_type_conflicts_are_retained(tmp_path):
@@ -51,7 +82,9 @@ def test_exact_duplicates_are_ignored_but_mark_and_rate_type_conflicts_are_retai
     changed_source = {**regular, "source": "binance_fapi_fundingRate_backfill"}
     assert store.save_funding_observations("BTCUSDT", [regular], 1700000001000) == 1
     assert store.save_funding_observations("BTCUSDT", [regular], 1700000002000) == 0
-    assert store.save_funding_observations("BTCUSDT", [special, changed_mark, changed_source], 1700000003000) == 2
+    assert store.save_funding_observations(
+        "BTCUSDT", [special, changed_mark, changed_source], 1700000003000
+    ) == 2
     rows = store.funding_history("BTCUSDT")
     assert len(rows) == 3
     assert {row["rate_type"] for row in rows} == {"Regular", "Special"}
@@ -77,9 +110,10 @@ def test_backup_restore_preserves_settlement_fields(tmp_path):
     assert row["funding_rate"] == "-0.0002"
     assert row["settlement_mark_price"] == "2000.5"
     assert row["rate_type"] == "Regular"
+    assert row["sources"] == ["binance_fapi_fundingRate"]
 
 
-def test_legacy_database_without_version_row_is_migrated(tmp_path):
+def test_legacy_database_without_version_row_is_migrated_and_backup_restored(tmp_path):
     database = tmp_path / "no-version.sqlite3"
     with sqlite3.connect(database) as conn:
         conn.executescript("""
@@ -96,4 +130,9 @@ def test_legacy_database_without_version_row_is_migrated(tmp_path):
     store = SQLiteMarketStore(str(database))
     assert store.funding_history("SOLUSDT")[0]["settlement_mark_price"] is None
     with sqlite3.connect(database) as conn:
-        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 4
+        assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 5
+    backup = next(tmp_path.glob("no-version.sqlite.pre_v5.*.bak"))
+    restored = SQLiteMarketStore.restore_from_backup(
+        str(backup), str(tmp_path / "restored-legacy-no-version.sqlite")
+    )
+    assert restored.funding_history("SOLUSDT")[0]["funding_rate"] == "0.0003"
