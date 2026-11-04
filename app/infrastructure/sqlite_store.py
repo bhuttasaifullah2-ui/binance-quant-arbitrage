@@ -151,13 +151,13 @@ class SQLiteMarketStore:
                                 WHERE c.symbol=o.symbol AND c.funding_time_ms=o.funding_time_ms
                                   AND c.funding_rate=o.funding_rate
                                   AND COALESCE(c.settlement_mark_price,'')=COALESCE(o.settlement_mark_price,'')
-                                  AND COALESCE(c.rate_type,'')=COALESCE(o.rate_type,'')),
+                                  AND COALESCE(c.rate_type,'Regular')=COALESCE(o.rate_type,'Regular')),
                                o.source,o.observed_at_ms
                         FROM funding_observations o""")
                     conn.execute("""DELETE FROM funding_observations WHERE id NOT IN (
                         SELECT MIN(id) FROM funding_observations
                         GROUP BY symbol,funding_time_ms,funding_rate,
-                                 COALESCE(settlement_mark_price,''),COALESCE(rate_type,''))""")
+                                 COALESCE(settlement_mark_price,''),COALESCE(rate_type,'Regular'))""")
                     conn.execute("""CREATE INDEX idx_funding_symbol_time
                         ON funding_observations(symbol, funding_time_ms DESC)""")
                     conn.execute("""CREATE UNIQUE INDEX uq_funding_economic_event
@@ -179,7 +179,7 @@ class SQLiteMarketStore:
                 conn.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
             conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_funding_economic_event
                 ON funding_observations(symbol, funding_time_ms, funding_rate,
-                    COALESCE(settlement_mark_price, ''), COALESCE(rate_type, ''))""")
+                    COALESCE(settlement_mark_price, ''), COALESCE(rate_type, 'Regular'))""")
 
     def backup_to(self, destination_path: str) -> str:
         """Create a consistent, verified online backup without overwriting a prior file."""
@@ -268,7 +268,7 @@ class SQLiteMarketStore:
                 event = conn.execute("""SELECT id FROM funding_observations
                     WHERE symbol=? AND funding_time_ms=? AND funding_rate=?
                       AND COALESCE(settlement_mark_price,'')=COALESCE(?,'')
-                      AND COALESCE(rate_type,'')=COALESCE(?,'')""",
+                      AND COALESCE(rate_type,'Regular')=COALESCE(?,'Regular')""",
                     (symbol.upper(), int(funding_time), str(funding_rate),
                      None if mark is None else str(mark), str(rate_type))).fetchone()
                 if event is None:
@@ -385,7 +385,7 @@ class SQLiteMarketStore:
 
     def funding_history(self, symbol: str, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         with self._connect() as conn:
-            rows = conn.execute("""SELECT symbol,funding_time_ms,funding_rate,settlement_mark_price,
+            rows = conn.execute("""SELECT id,symbol,funding_time_ms,funding_rate,settlement_mark_price,
                 rate_type,observed_at_ms,source FROM funding_observations WHERE symbol=?
                 ORDER BY funding_time_ms DESC,rate_type,settlement_mark_price LIMIT ? OFFSET ?""",
                 (symbol.upper(), limit, offset)).fetchall()
