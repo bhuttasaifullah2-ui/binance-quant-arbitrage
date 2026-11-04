@@ -162,7 +162,7 @@ class SQLiteMarketStore:
                         ON funding_observations(symbol, funding_time_ms DESC)""")
                     conn.execute("""CREATE UNIQUE INDEX uq_funding_economic_event
                         ON funding_observations(symbol,funding_time_ms,funding_rate,
-                            COALESCE(settlement_mark_price,''),COALESCE(rate_type,''))""")
+                            COALESCE(settlement_mark_price,''),COALESCE(rate_type,'Regular'))""")
                     conn.execute("DELETE FROM schema_version")
                     conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
                     conn.commit()
