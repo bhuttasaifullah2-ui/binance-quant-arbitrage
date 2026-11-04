@@ -95,6 +95,7 @@ async def lifespan(app: FastAPI):
                         "futures_bid": fb[symbol].get("bidPrice"), "futures_ask": fb[symbol].get("askPrice"),
                         "futures_last": ft[symbol].get("lastPrice"), "futures_quote_volume": ft[symbol].get("quoteVolume"),
                         "futures_mark": pi[symbol].get("markPrice"), "futures_index": pi[symbol].get("indexPrice"),
+                        "futures_premium_time_ms": pi[symbol].get("time"),
                         "funding_rate": pi[symbol].get("lastFundingRate"),
                         "next_funding_time_ms": (int(pi[symbol]["nextFundingTime"]) - hub.clock_offsets_ms.get("futures", 0)
                                                  if pi[symbol].get("nextFundingTime") is not None else None)}, now, now)
