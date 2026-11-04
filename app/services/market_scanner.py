@@ -347,6 +347,8 @@ class MarketScanner:
                         expected_previous_settlement_ms = next_funding - funding_interval * 3600000
                         history_stale = (latest_history is None or
                             latest_history.funding_time_ms < expected_previous_settlement_ms - 60000)
+                        settlement_time_mismatch = (latest_history is not None and
+                            latest_history.funding_time_ms > expected_previous_settlement_ms + 60000)
                         funding_consistent = (latest_history is not None and
                             abs(funding-latest_history.funding_rate) <= _d(getattr(self.config, "funding_reconciliation_tolerance", "0.00000001")))
                         if history_gaps:
@@ -358,6 +360,9 @@ class MarketScanner:
                         elif history_stale:
                             self._reject(symbol, "funding history stale: latest settlement predates expected previous settlement", now,
                                          "FUNDING_HISTORY_STALE")
+                        if settlement_time_mismatch:
+                            self._reject(symbol, "latest realized settlement timestamp is later than the expected schedule",
+                                         now, "FUNDING_SETTLEMENT_TIME_MISMATCH")
                         if latest_history is not None and not funding_consistent:
                             self._reject(symbol, "current observed funding does not reconcile with latest realized settlement",
                                          now, "FUNDING_RECONCILIATION_FAILED")
@@ -415,6 +420,10 @@ class MarketScanner:
                             self._reject(symbol, "funding history missing realized settlements", now, "FUNDING_HISTORY_MISSING"); continue
                         if history_stale:
                             self._reject(symbol, "funding history stale relative to expected previous settlement", now, "FUNDING_HISTORY_STALE"); continue
+                        if settlement_time_mismatch:
+                            self._reject(symbol, "latest funding settlement timestamp does not align with expected schedule",
+                                         now, "FUNDING_SETTLEMENT_TIME_MISMATCH")
+                            continue
                         if net <= _d(self.config.min_net_edge_usdt):
                             self._reject(symbol, "estimated net edge does not exceed configured minimum", now, "NET_EDGE_INSUFFICIENT"); continue
                         # All candidate opportunities pass this one final, shared gate.
@@ -489,6 +498,7 @@ class MarketScanner:
                             "funding_age_ms": funding_age, "max_funding_age_ms": self.config.max_data_age_seconds*1000,
                             "funding_history_missing": not funding_obs,
                             "funding_history_stale": history_stale,
+                            "funding_settlement_time_mismatch": settlement_time_mismatch,
                             "funding_gaps": history_gaps, "funding_inconsistent": not funding_consistent,
                             "hedge_valid": bool(hedge.get("executable")) and not actual_validation,
                             "residual_exposure_usdt": hedge.get("residual_directional_exposure"),
