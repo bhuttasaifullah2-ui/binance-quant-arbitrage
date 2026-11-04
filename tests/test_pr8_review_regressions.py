@@ -5,6 +5,7 @@ import pytest
 
 from app.domain.funding import (
     funding_payment,
+    historical_settlement_cashflow_for_short,
     linear_futures_funding_notional,
     summarize_funding,
 )
@@ -463,3 +464,21 @@ async def test_full_last_page_at_max_pages_is_reported_as_incomplete():
         await fetch_funding_history_with_stats(
             FullPageClient(), "BTCUSDT", page_size=2, max_pages=1
         )
+
+
+def test_historical_cashflow_uses_settlement_mark_and_missing_mark_is_unavailable():
+    quantity, multiplier = Decimal("0.2"), Decimal("10")
+    historical_mark, current_mark = Decimal("49000"), Decimal("50000")
+    rate = Decimal("0.0001")
+    historical = historical_settlement_cashflow_for_short(
+        quantity, multiplier, historical_mark, rate
+    )
+    current_proxy = historical_settlement_cashflow_for_short(
+        quantity, multiplier, current_mark, rate
+    )
+    assert historical == Decimal("9.8")
+    assert current_proxy == Decimal("10.0")
+    assert historical != current_proxy
+    assert historical_settlement_cashflow_for_short(
+        quantity, multiplier, None, rate
+    ) is None
