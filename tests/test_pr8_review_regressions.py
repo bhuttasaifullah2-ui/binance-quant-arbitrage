@@ -190,7 +190,7 @@ def test_migration_rollback_and_retry_preserve_legacy_row(tmp_path, monkeypatch)
 
     class FailCopyConnection(sqlite3.Connection):
         def execute(self, sql, parameters=()):
-            if "INSERT INTO funding_observations_v4" in sql and not failed["value"]:
+            if "INSERT INTO funding_observations_v5" in sql and not failed["value"]:
                 failed["value"] = True
                 raise sqlite3.OperationalError("injected interrupted migration")
             return super().execute(sql, parameters)
@@ -208,7 +208,7 @@ def test_migration_rollback_and_retry_preserve_legacy_row(tmp_path, monkeypatch)
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
         assert conn.execute("SELECT funding_rate FROM funding_observations").fetchone()[0] == "0.002"
-        assert conn.execute("SELECT name FROM sqlite_master WHERE name='funding_observations_v4'").fetchone() is None
+        assert conn.execute("SELECT name FROM sqlite_master WHERE name='funding_observations_v5'").fetchone() is None
     store = SQLiteMarketStore(str(db))
     assert store.funding_history("ETHUSDT")[0]["funding_rate"] == "0.002"
 
