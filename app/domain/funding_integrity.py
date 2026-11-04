@@ -113,15 +113,31 @@ def assess_funding_history(
     # A same-time Regular and Special are distinct events. Disagreement between
     # payloads for the same (timestamp, rateType) is ambiguous and fails closed.
     variants: dict[tuple[int, str], set[tuple[str, str]]] = {}
+    sources_by_event: dict[tuple[int, str], set[str]] = {}
     for stamp, rate, event_type, row in normalized:
         mark = row.get("markPrice", row.get("settlement_mark_price"))
         variants.setdefault((stamp, event_type), set()).add(
             (str(rate), "" if mark is None else str(mark))
         )
-    conflicts = sorted(stamp for (stamp, _), values in variants.items() if len(values) > 1)
+        source_values = row.get("sources") or [row.get("source")]
+        sources_by_event.setdefault((stamp, event_type), set()).update(
+            str(value or "binance_fapi_fundingRate") for value in source_values
+        )
+    conflicts = {stamp for (stamp, _), values in variants.items() if len(values) > 1}
+    event_types_by_time: dict[int, set[str]] = {}
+    for stamp, event_type, _ in sources_by_event:
+        event_types_by_time.setdefault(stamp, set()).add(event_type)
+    for stamp, event_types in event_types_by_time.items():
+        if len(event_types) > 1:
+            provenance_sets = [sources_by_event[(stamp, event_type)] for event_type in event_types]
+            # A Regular/Special pair reported by the same source is an explicit
+            # pair of distinct events. Disjoint provenance cannot establish that
+            # distinction, so treat it as a type-label conflict and fail closed.
+            if not set.intersection(*provenance_sets):
+                conflicts.add(stamp)
     if conflicts:
         return {"state": HISTORY_RECONCILIATION_FAILED,
-                "conflicting_settlement_timestamps": sorted(set(conflicts)),
+                "conflicting_settlement_timestamps": sorted(conflicts),
                 "missing_intervals_are_not_zero": True}
 
     regular_times = sorted({stamp for stamp, _, event_type, _ in normalized
