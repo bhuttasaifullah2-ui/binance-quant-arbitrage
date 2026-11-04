@@ -1,6 +1,8 @@
 """SQLite persistence with additive, restart-safe schema upgrades."""
 import json
+import os
 import sqlite3
+import uuid
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -70,82 +72,131 @@ class SQLiteMarketStore:
         conn.execute("PRAGMA foreign_keys=ON")
         return conn
 
+    def _create_verified_backup(self, conn: sqlite3.Connection, destination: Path) -> str:
+        """Create a non-overwriting online backup and verify it before migration."""
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        os.close(descriptor)
+        target = None
+        try:
+            target = sqlite3.connect(destination)
+            conn.backup(target)
+            integrity = target.execute("PRAGMA integrity_check").fetchone()
+            if integrity is None or integrity[0] != "ok":
+                raise sqlite3.DatabaseError("migration backup failed SQLite integrity_check")
+            target.commit()
+        except Exception:
+            if target is not None:
+                target.close()
+                target = None
+            destination.unlink(missing_ok=True)
+            raise
+        finally:
+            if target is not None:
+                target.close()
+        return str(destination)
+
     def _initialize(self) -> None:
         with self._connect() as conn:
-            conn.executescript(SCHEMA)
-            row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
-            columns = {item["name"] for item in conn.execute(
-                "PRAGMA table_info(funding_observations)").fetchall()}
-            current_version = 0 if row is None else int(row["version"])
-            needs_rebuild = "settlement_mark_price" not in columns or "rate_type" not in columns
-            if (row is not None and current_version < SCHEMA_VERSION) or needs_rebuild:
-                backup_path = Path(f"{self.path}.pre_v4.bak")
-                backup = sqlite3.connect(backup_path)
-                try:
-                    conn.backup(backup)
-                finally:
-                    backup.close()
-                columns = {item["name"] for item in conn.execute(
-                    "PRAGMA table_info(funding_observations)").fetchall()}
+            tables = {row["name"] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            has_funding = "funding_observations" in tables
+            has_version = "schema_version" in tables
+            version_row = (conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+                           if has_version else None)
+            current_version = 0 if version_row is None else int(version_row["version"])
+            columns = ({item["name"] for item in conn.execute(
+                "PRAGMA table_info(funding_observations)").fetchall()} if has_funding else set())
+            needs_rebuild = has_funding and (
+                current_version < SCHEMA_VERSION
+                or "settlement_mark_price" not in columns
+                or "rate_type" not in columns
+            )
+
+            if needs_rebuild:
+                backup_path = Path(
+                    f"{self.path}.pre_v4.{uuid.uuid4().hex}.bak"
+                )
+                self.last_migration_backup_path = self._create_verified_backup(conn, backup_path)
                 mark_expr = "settlement_mark_price" if "settlement_mark_price" in columns else "NULL"
                 type_expr = "rate_type" if "rate_type" in columns else "NULL"
                 source_expr = "source" if "source" in columns else "'legacy_unknown'"
                 conn.execute("BEGIN IMMEDIATE")
-                conn.execute("""CREATE TABLE funding_observations_v4 (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL,
-                    funding_time_ms INTEGER NOT NULL, funding_rate TEXT NOT NULL,
-                    settlement_mark_price TEXT, rate_type TEXT, observed_at_ms INTEGER NOT NULL,
-                    source TEXT NOT NULL DEFAULT 'binance_fapi_fundingRate')""")
-                conn.execute(f"""INSERT INTO funding_observations_v4
-                    (id,symbol,funding_time_ms,funding_rate,settlement_mark_price,rate_type,
-                     observed_at_ms,source)
-                    SELECT id,symbol,funding_time_ms,funding_rate,{mark_expr},{type_expr},
-                           observed_at_ms,{source_expr} FROM funding_observations""")
-                conn.execute("DROP TABLE funding_observations")
-                conn.execute("ALTER TABLE funding_observations_v4 RENAME TO funding_observations")
-                conn.execute("""CREATE INDEX idx_funding_symbol_time
-                    ON funding_observations(symbol, funding_time_ms DESC)""")
-                conn.execute("DELETE FROM schema_version")
+                try:
+                    if not has_version:
+                        conn.execute("CREATE TABLE schema_version (version INTEGER NOT NULL)")
+                    conn.execute("""CREATE TABLE funding_observations_v4 (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL,
+                        funding_time_ms INTEGER NOT NULL, funding_rate TEXT NOT NULL,
+                        settlement_mark_price TEXT, rate_type TEXT, observed_at_ms INTEGER NOT NULL,
+                        source TEXT NOT NULL DEFAULT 'binance_fapi_fundingRate')""")
+                    conn.execute(f"""INSERT INTO funding_observations_v4
+                        (id,symbol,funding_time_ms,funding_rate,settlement_mark_price,rate_type,
+                         observed_at_ms,source)
+                        SELECT id,symbol,funding_time_ms,funding_rate,{mark_expr},{type_expr},
+                               observed_at_ms,{source_expr} FROM funding_observations""")
+                    conn.execute("DROP TABLE funding_observations")
+                    conn.execute("ALTER TABLE funding_observations_v4 RENAME TO funding_observations")
+                    conn.execute("""CREATE INDEX idx_funding_symbol_time
+                        ON funding_observations(symbol, funding_time_ms DESC)""")
+                    conn.execute("DELETE FROM schema_version")
+                    conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+
+            # Create ancillary tables/indexes only after the funding-table migration
+            # has committed. If interrupted here, a repeated initialization is safe.
+            conn.executescript(SCHEMA)
+            version_row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
+            if version_row is None:
                 conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-                conn.commit()
-            elif row is None:
-                conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
+            elif int(version_row["version"]) < SCHEMA_VERSION:
+                conn.execute("UPDATE schema_version SET version=?", (SCHEMA_VERSION,))
             conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_funding_event_payload
                 ON funding_observations(symbol, funding_time_ms, funding_rate,
                     COALESCE(settlement_mark_price, ''), COALESCE(rate_type, ''), source)""")
 
     def backup_to(self, destination_path: str) -> str:
-        """Create a consistent online SQLite backup, including committed WAL content."""
+        """Create a consistent, verified online backup without overwriting a prior file."""
         destination = Path(destination_path)
-        destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.resolve() == self.path.resolve():
             raise ValueError("backup destination must differ from the active database")
-        source = self._connect()
-        target = sqlite3.connect(destination)
-        try:
-            source.backup(target)
-        finally:
-            target.close()
-            source.close()
-        return str(destination)
+        return self._create_verified_backup(self._connect(), destination)
 
     @staticmethod
     def restore_from_backup(backup_path: str, database_path: str) -> "SQLiteMarketStore":
-        """Validate and restore a backup, then apply any pending additive migration."""
+        """Restore only into a new path; reject existing DBs and WAL/SHM sidecars."""
         source_path, destination = Path(backup_path), Path(database_path)
         if source_path.resolve() == destination.resolve():
             raise ValueError("backup and restore paths must differ")
+        sidecars = (Path(f"{destination}-wal"), Path(f"{destination}-shm"))
+        if destination.exists() or any(path.exists() for path in sidecars):
+            raise FileExistsError("restore destination or SQLite WAL/SHM sidecar already exists")
         source = sqlite3.connect(source_path)
+        descriptor = None
         try:
             integrity = source.execute("PRAGMA integrity_check").fetchone()
             if integrity is None or integrity[0] != "ok":
                 raise sqlite3.DatabaseError("backup failed SQLite integrity_check")
             destination.parent.mkdir(parents=True, exist_ok=True)
+            descriptor = os.open(destination, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            os.close(descriptor)
+            descriptor = None
             target = sqlite3.connect(destination)
             try:
                 source.backup(target)
+                restored_integrity = target.execute("PRAGMA integrity_check").fetchone()
+                if restored_integrity is None or restored_integrity[0] != "ok":
+                    raise sqlite3.DatabaseError("restored database failed SQLite integrity_check")
             finally:
                 target.close()
+        except Exception:
+            destination.unlink(missing_ok=True)
+            for sidecar in sidecars:
+                sidecar.unlink(missing_ok=True)
+            raise
         finally:
             source.close()
         return SQLiteMarketStore(str(destination))
