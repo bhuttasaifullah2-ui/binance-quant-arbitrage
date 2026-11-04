@@ -262,7 +262,6 @@ async def test_rate_limit_applies_shared_cooldown_without_retry_storm(status):
     client = BinancePublicClient("https://spot.invalid", "https://futures.invalid")
     client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     try:
-        await client.acquire_funding_request("current")
         with pytest.raises(BinanceAPIError, match="shared cooldown"):
             await client._get("futures", "/fapi/v1/fundingRate")
         with pytest.raises(BinanceAPIError, match="cooldown"):
@@ -492,3 +491,29 @@ async def test_malformed_funding_page_fails_closed():
 
     with pytest.raises(FundingHistoryPaginationError, match="malformed"):
         await fetch_funding_history_with_stats(MalformedClient(), "BTCUSDT", page_size=2)
+
+
+@pytest.mark.asyncio
+async def test_funding_retry_attempts_each_consume_shared_budget():
+    import httpx
+
+    calls = {"count": 0}
+
+    async def handler(request):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return httpx.Response(500, request=request)
+        return httpx.Response(200, json=[], request=request)
+
+    client = BinancePublicClient(
+        "https://spot.invalid", "https://futures.invalid",
+        max_retries=1, retry_base_seconds=0,
+        funding_request_limit=5, funding_current_reserve=1,
+    )
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        await client.futures_funding_history("BTCUSDT", limit=10)
+        assert calls["count"] == 2
+        assert len(client.funding_request_budget._requests) == 2
+    finally:
+        await client.close()
