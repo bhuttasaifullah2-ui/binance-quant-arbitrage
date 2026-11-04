@@ -407,20 +407,30 @@ class SQLiteMarketStore:
         return result
 
     def funding_history_conflicts(self, symbol: str) -> list[dict[str, Any]]:
-        """Report same-time, same-rateType economic payload disagreements only."""
+        """Report economic payload and ambiguous cross-source rateType conflicts."""
         with self._connect() as conn:
-            rows = conn.execute("""SELECT funding_time_ms,funding_rate,settlement_mark_price,rate_type
-                FROM funding_observations WHERE symbol=? ORDER BY funding_time_ms DESC""",
-                (symbol.upper(),)).fetchall()
+            rows = conn.execute("""SELECT funding_time_ms,funding_rate,settlement_mark_price,
+                rate_type,source FROM funding_observations WHERE symbol=?
+                ORDER BY funding_time_ms DESC""", (symbol.upper(),)).fetchall()
         variants: dict[tuple[int, str], set[tuple[str, str]]] = {}
+        sources: dict[tuple[int, str], set[str]] = {}
         for row in rows:
             key = (int(row["funding_time_ms"]), str(row["rate_type"] or "Regular"))
             payload = (str(row["funding_rate"]), str(row["settlement_mark_price"] or ""))
             variants.setdefault(key, set()).add(payload)
+            sources.setdefault(key, set()).add(str(row["source"] or "legacy_unknown"))
         conflicts: dict[int, int] = {}
         for (stamp, _event_type), payloads in variants.items():
             if len(payloads) > 1:
                 conflicts[stamp] = conflicts.get(stamp, 0) + len(payloads)
+        event_types_by_time: dict[int, set[str]] = {}
+        for stamp, event_type in sources:
+            event_types_by_time.setdefault(stamp, set()).add(event_type)
+        for stamp, event_types in event_types_by_time.items():
+            if len(event_types) > 1:
+                provenance_sets = [sources[(stamp, event_type)] for event_type in event_types]
+                if not set.intersection(*provenance_sets):
+                    conflicts[stamp] = conflicts.get(stamp, 0) + len(event_types)
         return [{"funding_time_ms": stamp, "record_count": count}
                 for stamp, count in sorted(conflicts.items(), reverse=True)]
 
