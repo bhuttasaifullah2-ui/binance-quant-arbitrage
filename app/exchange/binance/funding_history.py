@@ -24,7 +24,11 @@ async def fetch_funding_history_with_stats(client: BinancePublicClient, symbol: 
     previous_latest: int | None = None
     for _ in range(max_pages):
         request = client.futures_funding_history
-        if "priority" in inspect.signature(request).parameters:
+        try:
+            supports_priority = "priority" in inspect.signature(request).parameters
+        except (TypeError, ValueError):
+            supports_priority = False
+        if supports_priority:
             page = await request(symbol, page_size, start_time_ms=cursor,
                                  end_time_ms=end_time_ms, priority=priority)
         else:
