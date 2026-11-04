@@ -248,7 +248,7 @@ class SQLiteMarketStore:
             return cur.rowcount == 1
 
     def save_funding_observations(self, symbol: str, rows: list[dict[str, Any]], observed_at_ms: int) -> int:
-        """Save settlements; exact payload duplicates are idempotent, conflicts are retained."""
+        """Persist one economic event and append source/observation provenance."""
         inserted = 0
         with self._connect() as conn:
             for row in rows:
@@ -257,14 +257,25 @@ class SQLiteMarketStore:
                 if funding_time is None or funding_rate is None:
                     continue
                 mark = row.get("markPrice", row.get("settlement_mark_price"))
-                rate_type = row.get("rateType", row.get("rate_type"))
+                rate_type = row.get("rateType", row.get("rate_type")) or "Regular"
                 source = str(row.get("source") or "binance_fapi_fundingRate")
                 cur = conn.execute("""INSERT OR IGNORE INTO funding_observations
                     (symbol,funding_time_ms,funding_rate,settlement_mark_price,rate_type,
                      observed_at_ms,source) VALUES (?,?,?,?,?,?,?)""",
                     (symbol.upper(), int(funding_time), str(funding_rate),
-                     None if mark is None else str(mark),
-                     None if rate_type is None else str(rate_type), int(observed_at_ms), source))
+                     None if mark is None else str(mark), str(rate_type),
+                     int(observed_at_ms), source))
+                event = conn.execute("""SELECT id FROM funding_observations
+                    WHERE symbol=? AND funding_time_ms=? AND funding_rate=?
+                      AND COALESCE(settlement_mark_price,'')=COALESCE(?,'')
+                      AND COALESCE(rate_type,'')=COALESCE(?,'')""",
+                    (symbol.upper(), int(funding_time), str(funding_rate),
+                     None if mark is None else str(mark), str(rate_type))).fetchone()
+                if event is None:
+                    raise sqlite3.DatabaseError("funding economic event insert could not be resolved")
+                conn.execute("""INSERT OR IGNORE INTO funding_observation_sources
+                    (funding_observation_id,source,observed_at_ms) VALUES (?,?,?)""",
+                    (int(event["id"]), source, int(observed_at_ms)))
                 inserted += cur.rowcount
         return inserted
 
@@ -378,7 +389,14 @@ class SQLiteMarketStore:
                 rate_type,observed_at_ms,source FROM funding_observations WHERE symbol=?
                 ORDER BY funding_time_ms DESC,rate_type,settlement_mark_price LIMIT ? OFFSET ?""",
                 (symbol.upper(), limit, offset)).fetchall()
-        return [dict(row) for row in rows]
+            result = []
+            for row in rows:
+                item = dict(row)
+                sources = conn.execute("""SELECT DISTINCT source FROM funding_observation_sources
+                    WHERE funding_observation_id=? ORDER BY source""", (int(row["id"]),)).fetchall()
+                item["sources"] = [source_row["source"] for source_row in sources] or [item["source"]]
+                result.append(item)
+        return result
 
     def funding_history_conflicts(self, symbol: str) -> list[dict[str, Any]]:
         """Report same-time, same-rateType economic payload disagreements only."""
