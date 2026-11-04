@@ -1,5 +1,3 @@
-from decimal import Decimal as D
-
 from app.domain.funding_integrity import (
     FUNDING_RATE_RECONCILED,
     HISTORY_INCOMPLETE,
