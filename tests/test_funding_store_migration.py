@@ -29,7 +29,7 @@ def test_v3_funding_migration_preserves_legacy_record_and_creates_backup(tmp_pat
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 4
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
-    backup = tmp_path / "legacy.sqlite3.pre_v4.bak"
+    backup = next(tmp_path.glob("legacy.sqlite3.pre_v4.*.bak"))
     assert backup.exists()
     restored = SQLiteMarketStore.restore_from_backup(
         str(backup), str(tmp_path / "restored-from-pre-v4.sqlite3")
