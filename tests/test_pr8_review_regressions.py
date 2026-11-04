@@ -385,7 +385,7 @@ async def test_full_page_without_pagination_progress_fails_closed():
 async def test_staggered_rest_endpoint_responses_get_independent_midpoints(monkeypatch):
     from app.services import market_scanner
 
-    ticks = iter([1000, 1100, 1200, 1400])
+    ticks = iter([1000, 1100, 1800, 2000])
     monkeypatch.setattr(market_scanner.time, "time", lambda: next(ticks))
 
     async def payload(value):
@@ -396,5 +396,5 @@ async def test_staggered_rest_endpoint_responses_get_independent_midpoints(monke
     assert spot == "spot"
     assert futures == "futures"
     assert spot_midpoint == 1050
-    assert futures_midpoint == 1300
+    assert futures_midpoint == 1900
     assert abs(spot_midpoint - futures_midpoint) > 500
