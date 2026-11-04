@@ -10,7 +10,17 @@ def funding_payment(notional: Decimal, funding_rate: Decimal, short_receives_pos
     return notional * funding_rate * sign
 
 
+def deduplicate_funding_observations(observations: list[FundingObservation]) -> list[FundingObservation]:
+    """Remove source-only repeats while preserving Regular/Special event identity."""
+    unique: dict[tuple, FundingObservation] = {}
+    for item in observations:
+        key = (item.funding_time_ms, item.funding_rate, item.settlement_mark_price, item.rate_type)
+        unique.setdefault(key, item)
+    return sorted(unique.values(), key=lambda x: (x.funding_time_ms, x.rate_type or "Regular"))
+
+
 def summarize_funding(observations: list[FundingObservation]) -> dict[str, Decimal | int]:
+    observations = deduplicate_funding_observations(observations)
     if not observations:
         return {"count": 0, "mean": Decimal("0"), "median": Decimal("0"),
                 "min": Decimal("0"), "max": Decimal("0"), "negative_fraction": Decimal("0"),
@@ -19,7 +29,7 @@ def summarize_funding(observations: list[FundingObservation]) -> dict[str, Decim
                 "negative_percent": Decimal("0"), "consecutive_positive": 0,
                 "consecutive_negative": 0, "recent_trend": Decimal("0"),
                 "consistency": Decimal("0")}
-    ordered = sorted(observations, key=lambda x: x.funding_time_ms)
+    ordered = sorted(observations, key=lambda x: (x.funding_time_ms, x.rate_type or "Regular"))
     rates = [x.funding_rate for x in ordered]
     n = len(rates)
     mean = sum(rates, Decimal("0")) / n
@@ -75,8 +85,6 @@ def detect_funding_interval_hours(funding_times_ms: list[int], default_hours: in
                   else Decimal(ordered_gaps[mid-1] + ordered_gaps[mid]) / 2)
     hours = (median_gap / Decimal("3600000")).to_integral_value(rounding=ROUND_HALF_UP)
     result = int(hours)
-    # Documented USD-M perpetual intervals are 1h, 4h and 8h. An observed
-    # 16h gap must not be reclassified as a legitimate 16h interval.
     return result if result in {1, 4, 8} else default_hours
 
 
@@ -85,7 +93,7 @@ def funding_history_gaps(observations: list[FundingObservation], interval_hours:
     """Return adjacent settlement gaps that exceed the expected interval plus tolerance."""
     if interval_hours <= 0:
         raise ValueError("interval_hours must be positive")
-    ordered = sorted({x.funding_time_ms for x in observations})
+    ordered = sorted({x.funding_time_ms for x in observations if (x.rate_type or "Regular") == "Regular"})
     expected = interval_hours * 3600000
     return [(a, b) for a, b in zip(ordered, ordered[1:]) if b-a > expected+tolerance_ms]
 
