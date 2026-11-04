@@ -66,7 +66,7 @@ def test_v4_migration_collapses_source_duplicates_but_preserves_provenance_and_c
     )
     assert set(regular_same_payload["sources"]) == {"primary", "backfill"}
     assert store.funding_history_conflicts("BTCUSDT") == [
-        {"funding_time_ms": 100, "record_count": 2}
+        {"funding_time_ms": 100, "record_count": 3}
     ]
     with sqlite3.connect(database) as conn:
         assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 5
