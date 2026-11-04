@@ -5,8 +5,8 @@ from decimal import Decimal
 from typing import Any
 
 from app.domain.exchange_filters import SymbolFilters, matched_valid_hedge
-from app.domain.funding import (summarize_funding, detect_funding_interval_hours,
-                                funding_history_gaps, linear_futures_funding_notional)
+from app.domain.funding import (summarize_funding, funding_history_gaps,
+                                linear_futures_funding_notional)
 from app.domain.funding_integrity import (
     FUNDING_RATE_RECONCILED, HISTORY_INCOMPLETE, HISTORY_MISSING, HISTORY_STALE,
     HISTORY_RECONCILIATION_FAILED, adjusted_rate_within_limits, assess_funding_history,
@@ -408,9 +408,7 @@ class MarketScanner:
                             hist, interval_hours=funding_interval, next_funding_time_ms=next_funding,
                             current_funding_rate=funding,
                             rate_tolerance=_d(getattr(self.config, "funding_reconciliation_tolerance", "0.00000001")))
-                        latest_history = max(funding_obs, key=lambda x: x.funding_time_ms) if funding_obs else None
                         history_stale = funding_state["state"] == HISTORY_STALE
-                        funding_consistent = funding_state["state"] == FUNDING_RATE_RECONCILED
                         state_codes = {
                             HISTORY_MISSING: ("FUNDING_HISTORY_MISSING", "funding history missing realized settlements"),
                             HISTORY_INCOMPLETE: ("FUNDING_HISTORY_INCOMPLETE", "funding history or interval coverage is incomplete"),
