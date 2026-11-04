@@ -22,6 +22,8 @@ async def fetch_funding_history_with_stats(client: BinancePublicClient, symbol: 
     seen: dict[tuple[Any, ...], dict[str, Any]] = {}
     duplicates = 0
     previous_latest: int | None = None
+    last_page_full = False
+    reached_end = False
     for _ in range(max_pages):
         request = client.futures_funding_history
         try:
@@ -54,7 +56,11 @@ async def fetch_funding_history_with_stats(client: BinancePublicClient, symbol: 
                 seen[identity] = row
                 new_rows += 1
         latest = max(int(x["fundingTime"]) for x in valid)
-        if len(page) < page_size or (end_time_ms is not None and latest >= end_time_ms):
+        last_page_full = len(page) >= page_size
+        if end_time_ms is not None and latest >= end_time_ms:
+            reached_end = True
+            break
+        if len(page) < page_size:
             break
         if previous_latest is not None and latest <= previous_latest and new_rows == 0:
             raise FundingHistoryPaginationError(
@@ -64,6 +70,11 @@ async def fetch_funding_history_with_stats(client: BinancePublicClient, symbol: 
         # Regular/Special row sharing the last timestamp on the previous page.
         cursor = latest
         previous_latest = latest
+    else:
+        if last_page_full and not reached_end:
+            raise FundingHistoryPaginationError(
+                f"funding history for {symbol} reached max_pages with a full page; coverage may be truncated"
+            )
     return [seen[key] for key in sorted(seen, key=lambda item: (
         item[0], item[3], item[2], item[1]))], duplicates
 
