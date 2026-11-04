@@ -413,3 +413,14 @@ def test_cross_source_rate_type_disagreement_blocks_reconciliation():
         current_funding_rate="0.0001",
     )
     assert result["state"] == HISTORY_RECONCILIATION_FAILED
+
+
+def test_database_reports_cross_source_event_type_conflict(tmp_path):
+    store = SQLiteMarketStore(str(tmp_path / "type-conflict.sqlite"))
+    regular = {"fundingTime": BASE, "fundingRate": "0.0001",
+               "markPrice": "50000", "rateType": "Regular", "source": "primary"}
+    special_label = {**regular, "rateType": "Special", "source": "backfill"}
+    store.save_funding_observations("BTCUSDT", [regular, special_label], BASE + 1)
+    assert store.funding_history_conflicts("BTCUSDT") == [
+        {"funding_time_ms": BASE, "record_count": 2}
+    ]
