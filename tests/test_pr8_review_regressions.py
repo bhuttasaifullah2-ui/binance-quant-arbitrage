@@ -517,3 +517,25 @@ async def test_funding_retry_attempts_each_consume_shared_budget():
         assert len(client.funding_request_budget._requests) == 2
     finally:
         await client.close()
+
+
+@pytest.mark.asyncio
+async def test_http_418_pauses_all_public_endpoints_without_retry():
+    import httpx
+
+    calls = {"count": 0}
+
+    async def handler(request):
+        calls["count"] += 1
+        return httpx.Response(418, headers={"Retry-After": "30"}, request=request)
+
+    client = BinancePublicClient("https://spot.invalid", "https://futures.invalid")
+    client._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    try:
+        with pytest.raises(BinanceAPIError, match="IP ban"):
+            await client.spot_exchange_info()
+        with pytest.raises(BinanceAPIError, match="IP cooldown"):
+            await client.futures_exchange_info()
+        assert calls["count"] == 1
+    finally:
+        await client.close()
