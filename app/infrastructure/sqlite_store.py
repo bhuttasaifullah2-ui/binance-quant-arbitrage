@@ -430,7 +430,8 @@ class SQLiteMarketStore:
             if len(event_types) > 1:
                 provenance_sets = [sources[(stamp, event_type)] for event_type in event_types]
                 if not set.intersection(*provenance_sets):
-                    conflicts[stamp] = conflicts.get(stamp, 0) + len(event_types)
+                    variant_count = sum(len(variants[(stamp, event_type)]) for event_type in event_types)
+                    conflicts[stamp] = max(conflicts.get(stamp, 0), variant_count)
         return [{"funding_time_ms": stamp, "record_count": count}
                 for stamp, count in sorted(conflicts.items(), reverse=True)]
 
