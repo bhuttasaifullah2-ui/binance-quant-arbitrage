@@ -42,3 +42,43 @@ def test_data_quality_distinguishes_missing_invalid_and_stale():
     result=service.data_quality()
     assert result["symbols"]["BTCUSDT"]["status"]=="INVALID"
     assert "futures_bid" in result["symbols"]["BTCUSDT"]["missing_fields"]
+
+
+def test_manual_validation_respects_disabled_websocket_probes():
+    import asyncio
+    import time
+    from app.services.live_validation import LiveValidationService
+    from app.services.market_data_hub import MarketDataHub
+
+    class Client:
+        async def spot_server_time(self):
+            return {"serverTime": int(time.time() * 1000)}
+        async def futures_server_time(self):
+            return {"serverTime": int(time.time() * 1000)}
+        async def spot_exchange_info(self):
+            return {"symbols": []}
+        async def futures_exchange_info(self):
+            return {"symbols": []}
+        async def futures_premium_index(self):
+            return []
+        async def spot_depth(self, symbol, limit):
+            return {"bids": [], "asks": []}
+        async def futures_depth(self, symbol, limit):
+            return {"bids": [], "asks": []}
+
+    class Store:
+        def record(self, *args):
+            pass
+
+    service = LiveValidationService(Client(), MarketDataHub(), object(), Store(),
+                                    websocket_probes_enabled=False)
+
+    async def forbidden_probe(*args):
+        raise AssertionError("WebSocket probe must not run when disabled")
+
+    service._ws_probe = forbidden_probe
+    result = asyncio.run(service.validate())
+    assert result["websocket_probes"] == "DISABLED"
+    assert all(item["status"] == "DISABLED" for item in result["checks"]
+               if item["name"].endswith("websocket"))
+    assert result["status"] == "HEALTHY"
