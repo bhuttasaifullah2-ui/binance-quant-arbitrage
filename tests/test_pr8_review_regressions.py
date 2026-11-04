@@ -448,3 +448,18 @@ def test_migration_stops_if_backup_integrity_verification_fails(tmp_path, monkey
     with sqlite3.connect(db) as conn:
         assert conn.execute("SELECT version FROM schema_version").fetchone()[0] == 3
         assert conn.execute("SELECT funding_rate FROM funding_observations").fetchone()[0] == "0.001"
+
+
+@pytest.mark.asyncio
+async def test_full_last_page_at_max_pages_is_reported_as_incomplete():
+    class FullPageClient:
+        async def futures_funding_history(self, symbol, limit, start_time_ms=None, end_time_ms=None):
+            return [
+                {"fundingTime": 100, "fundingRate": "0.001", "rateType": "Regular"},
+                {"fundingTime": 200, "fundingRate": "0.001", "rateType": "Regular"},
+            ]
+
+    with pytest.raises(FundingHistoryPaginationError, match="reached max_pages"):
+        await fetch_funding_history_with_stats(
+            FullPageClient(), "BTCUSDT", page_size=2, max_pages=1
+        )
