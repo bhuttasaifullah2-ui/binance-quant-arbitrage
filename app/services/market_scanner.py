@@ -33,6 +33,14 @@ def _d(value: Any) -> Decimal:
     return Decimal(str(value))
 
 
+async def _timed_request(request):
+    """Return a REST payload with its local request-window midpoint proxy."""
+    request_start = int(time.time() * 1000)
+    value = await request
+    request_end = int(time.time() * 1000)
+    return value, (request_start + request_end) // 2
+
+
 def _merge_funding_history(new_rows: list[dict[str, Any]],
                            stored_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Merge REST and stored observations by economic event, retaining provenance."""
@@ -253,16 +261,10 @@ class MarketScanner:
                     rest_started = int(time.time() * 1000)
                     rest_snapshot_ms = rest_started
 
-                    async def timed_request(request):
-                        request_start = int(time.time() * 1000)
-                        value = await request
-                        request_end = int(time.time() * 1000)
-                        return value, (request_start + request_end) // 2
-
                     (spot_tickers, spot_ticker_ms), (spot_books, spot_book_ms), \
                     (fut_tickers, futures_ticker_ms), (fut_books, futures_book_ms), \
                     (premium, premium_ms) = await asyncio.gather(
-                        timed_request(self.client.spot_ticker_24h()),
+                        _timed_request(self.client.spot_ticker_24h()),
                         timed_request(self.client.spot_book_ticker()),
                         timed_request(self.client.futures_ticker_24h()),
                         timed_request(self.client.futures_book_ticker()),
