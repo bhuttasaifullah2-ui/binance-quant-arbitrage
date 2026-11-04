@@ -11,7 +11,6 @@ from app.domain.funding import (
 from app.domain.funding_integrity import (
     FUNDING_RATE_RECONCILED,
     HISTORY_INCOMPLETE,
-    HISTORY_RECONCILIATION_FAILED,
     assess_funding_history,
     snapshot_fields_are_acceptable,
     deduplicate_economic_settlements,
