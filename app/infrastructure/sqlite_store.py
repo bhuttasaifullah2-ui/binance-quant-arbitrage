@@ -171,6 +171,8 @@ class SQLiteMarketStore:
         source_path, destination = Path(backup_path), Path(database_path)
         if source_path.resolve() == destination.resolve():
             raise ValueError("backup and restore paths must differ")
+        if not source_path.is_file():
+            raise FileNotFoundError(f"SQLite backup does not exist: {source_path}")
         sidecars = (Path(f"{destination}-wal"), Path(f"{destination}-shm"),
                     Path(f"{destination}-journal"))
         if destination.exists() or any(path.exists() for path in sidecars):
@@ -182,6 +184,10 @@ class SQLiteMarketStore:
             integrity = source.execute("PRAGMA integrity_check").fetchone()
             if integrity is None or integrity[0] != "ok":
                 raise sqlite3.DatabaseError("backup failed SQLite integrity_check")
+            tables = {row[0] for row in source.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+            if not {"schema_version", "funding_observations"}.issubset(tables):
+                raise sqlite3.DatabaseError("backup is missing expected market-store tables")
             destination.parent.mkdir(parents=True, exist_ok=True)
             descriptor = os.open(temp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             os.close(descriptor)
