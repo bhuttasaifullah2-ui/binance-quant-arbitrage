@@ -1,0 +1,246 @@
+from decimal import Decimal
+import sqlite3
+
+import pytest
+
+from app.domain.funding import (
+    deduplicate_funding_observations,
+    funding_payment,
+    linear_futures_funding_notional,
+    summarize_funding,
+)
+from app.domain.funding_integrity import (
+    FUNDING_RATE_RECONCILED,
+    HISTORY_INCOMPLETE,
+    HISTORY_RECONCILIATION_FAILED,
+    assess_funding_history,
+    snapshot_fields_are_acceptable,
+)
+from app.domain.models import FundingObservation
+from app.exchange.binance.funding_history import fetch_funding_history_with_stats
+from app.exchange.binance.public_client import FundingRequestBudget
+from app.infrastructure.sqlite_store import SQLiteMarketStore
+
+
+HOUR = 3_600_000
+BASE = 1_700_000_000_000
+
+
+def regular_rows(gaps=(8 * HOUR, 8 * HOUR)):
+    stamps = [BASE]
+    for gap in gaps:
+        stamps.append(stamps[-1] + gap)
+    return [
+        {"fundingTime": stamp, "fundingRate": "0.0001", "markPrice": "50000",
+         "rateType": "Regular"}
+        for stamp in stamps
+    ]
+
+
+def test_seven_hour_regular_gap_is_not_reconciled():
+    rows = regular_rows((7 * HOUR, 8 * HOUR))
+    result = assess_funding_history(
+        rows, interval_hours=8, next_funding_time_ms=rows[-1]["fundingTime"] + 8 * HOUR,
+        current_funding_rate="0.0001",
+    )
+    assert result["state"] == HISTORY_INCOMPLETE
+    assert result["reason_code"] == "REGULAR_SETTLEMENT_CADENCE_INVALID"
+
+
+def test_special_event_is_separate_from_regular_cadence():
+    rows = regular_rows()
+    rows.insert(1, {"fundingTime": rows[0]["fundingTime"] + 3 * HOUR,
+                    "fundingRate": "0.00002", "markPrice": "50020", "rateType": "Special"})
+    result = assess_funding_history(
+        rows, interval_hours=8, next_funding_time_ms=rows[-1]["fundingTime"] + 8 * HOUR,
+        current_funding_rate="0.0001",
+    )
+    assert result["state"] == FUNDING_RATE_RECONCILED
+    assert result["special_event_count"] == 1
+    assert result["regular_settlement_count"] == 3
+
+
+def test_source_only_duplicates_count_once_and_keep_provenance():
+    rows = [
+        {"fundingTime": BASE, "fundingRate": "0.0001", "markPrice": "50000",
+         "rateType": "Regular", "source": "primary"},
+        {"fundingTime": BASE, "fundingRate": "0.0001", "markPrice": "50000",
+         "rateType": "Regular", "source": "backfill"},
+        {"fundingTime": BASE + 8 * HOUR, "fundingRate": "0.0002", "markPrice": "50100",
+         "rateType": "Regular", "source": "primary"},
+    ]
+    collapsed = deduplicate_funding_observations(rows)
+    assert len(collapsed) == 2
+    assert set(collapsed[0]["sources"]) == {"primary", "backfill"}
+    observations = [FundingObservation("BTCUSDT", Decimal(row["fundingRate"]),
+                                       int(row["fundingTime"])) for row in collapsed]
+    assert summarize_funding(observations)["count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_same_timestamp_special_split_across_page_boundary_is_not_skipped():
+    class SplitBoundaryClient:
+        def __init__(self):
+            self.calls = []
+
+        async def futures_funding_history(self, symbol, limit, start_time_ms=None, end_time_ms=None):
+            self.calls.append(start_time_ms)
+            if start_time_ms is None:
+                return [
+                    {"fundingTime": 100, "fundingRate": "0.001", "rateType": "Regular"},
+                    {"fundingTime": 200, "fundingRate": "0.001", "rateType": "Regular"},
+                ]
+            if start_time_ms == 200:
+                return [
+                    {"fundingTime": 200, "fundingRate": "0.0002", "rateType": "Special"},
+                    {"fundingTime": 300, "fundingRate": "0.002", "rateType": "Regular"},
+                ]
+            return []
+
+    client = SplitBoundaryClient()
+    rows, _ = await fetch_funding_history_with_stats(
+        client, "BTCUSDT", page_size=2, max_pages=3
+    )
+    assert {(r["fundingTime"], r.get("rateType")) for r in rows} == {
+        (100, "Regular"), (200, "Regular"), (200, "Special"), (300, "Regular")
+    }
+    assert client.calls[:2] == [None, 200]
+
+
+def test_shared_funding_budget_reserves_capacity_for_current_data():
+    budget = FundingRequestBudget(limit=10, reserve_for_current=2, window_seconds=300)
+    for _ in range(8):
+        budget.try_acquire("backfill", now=100)
+    with pytest.raises(RuntimeError, match="budget"):
+        budget.try_acquire("backfill", now=100)
+    assert budget.try_acquire("current", now=100)
+    assert budget.try_acquire("current", now=100)
+    with pytest.raises(RuntimeError, match="budget"):
+        budget.try_acquire("current", now=100)
+
+
+def test_snapshot_checks_every_required_field_timestamp():
+    fresh = {
+        "spot_bid": BASE, "spot_ask": BASE + 100, "spot_last": BASE + 200,
+        "spot_quote_volume": BASE + 300, "futures_bid": BASE + 400,
+        "futures_ask": BASE + 500, "futures_last": BASE + 600,
+        "futures_quote_volume": BASE + 700, "futures_mark": BASE + 800,
+        "futures_index": BASE + 900, "funding_rate": BASE + 1000,
+        "next_funding_time_ms": BASE + 1100,
+    }
+    assert snapshot_fields_are_acceptable(fresh, now_ms=BASE + 2000,
+                                           max_age_ms=5000, max_skew_ms=2000)
+    stale_bid = dict(fresh, spot_bid=BASE - 10_000)
+    assert not snapshot_fields_are_acceptable(stale_bid, now_ms=BASE + 2000,
+                                              max_age_ms=5000, max_skew_ms=20_000)
+    staggered = dict(fresh, futures_index=BASE + 10_000)
+    assert not snapshot_fields_are_acceptable(staggered, now_ms=BASE + 11_000,
+                                              max_age_ms=20_000, max_skew_ms=2000)
+
+
+def test_wal_online_backup_preserves_committed_rows(tmp_path):
+    db = tmp_path / "wal.sqlite"
+    store = SQLiteMarketStore(str(db))
+    store.save_funding_observations("BTCUSDT", [
+        {"fundingTime": BASE, "fundingRate": "0.001", "markPrice": "50000",
+         "rateType": "Regular"}
+    ], BASE + 1)
+    backup = store.backup_to(str(tmp_path / "backup.sqlite"))
+    restored = SQLiteMarketStore.restore_from_backup(backup, str(tmp_path / "restored.sqlite"))
+    assert len(restored.funding_history("BTCUSDT")) == 1
+
+
+def test_migration_backup_is_unique_and_integrity_checked_before_rebuild(tmp_path):
+    db = tmp_path / "legacy.sqlite"
+    with sqlite3.connect(db) as conn:
+        conn.executescript("""
+            CREATE TABLE schema_version(version INTEGER NOT NULL);
+            INSERT INTO schema_version VALUES (3);
+            CREATE TABLE funding_observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL,
+                funding_time_ms INTEGER NOT NULL, funding_rate TEXT NOT NULL,
+                observed_at_ms INTEGER NOT NULL, source TEXT NOT NULL,
+                UNIQUE(symbol, funding_time_ms)
+            );
+            INSERT INTO funding_observations VALUES
+                (1, 'BTCUSDT', 100, '0.001', 101, 'legacy');
+        """)
+    store = SQLiteMarketStore(str(db))
+    first_backup = next(tmp_path.glob("legacy.sqlite.pre_v4.*.bak"))
+    assert sqlite3.connect(first_backup).execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+    store._initialize()
+    assert first_backup.exists()
+    assert store.funding_history("BTCUSDT")[0]["settlement_mark_price"] is None
+
+
+def test_migration_rollback_and_retry_preserve_legacy_row(tmp_path, monkeypatch):
+    db = tmp_path / "rollback.sqlite"
+    with sqlite3.connect(db) as conn:
+        conn.executescript("""
+            CREATE TABLE schema_version(version INTEGER NOT NULL);
+            INSERT INTO schema_version VALUES (3);
+            CREATE TABLE funding_observations (
+                id INTEGER PRIMARY KEY, symbol TEXT NOT NULL, funding_time_ms INTEGER NOT NULL,
+                funding_rate TEXT NOT NULL, observed_at_ms INTEGER NOT NULL, source TEXT NOT NULL
+            );
+            INSERT INTO funding_observations VALUES (1, 'ETHUSDT', 200, '0.002', 201, 'legacy');
+        """)
+    original_connect = SQLiteMarketStore._connect
+    calls = {"count": 0}
+
+    class FailOnceConnection:
+        def __init__(self, conn):
+            self.conn = conn
+
+        def __getattr__(self, name):
+            return getattr(self.conn, name)
+
+    def fail_commit_once(self):
+        conn = original_connect(self)
+        calls["count"] += 1
+        if calls["count"] == 1:
+            class Proxy(FailOnceConnection):
+                def commit(self):
+                    raise sqlite3.OperationalError("injected interrupted migration")
+            return Proxy(conn)
+        return conn
+
+    monkeypatch.setattr(SQLiteMarketStore, "_connect", fail_commit_once)
+    with pytest.raises(sqlite3.OperationalError):
+        SQLiteMarketStore(str(db))
+    monkeypatch.setattr(SQLiteMarketStore, "_connect", original_connect)
+    store = SQLiteMarketStore(str(db))
+    assert store.funding_history("ETHUSDT")[0]["funding_rate"] == "0.002"
+
+
+def test_restore_refuses_existing_destination_and_wal_sidecars(tmp_path):
+    store = SQLiteMarketStore(str(tmp_path / "source.sqlite"))
+    backup = store.backup_to(str(tmp_path / "source-backup.sqlite"))
+    destination = tmp_path / "existing.sqlite"
+    destination.write_bytes(b"keep")
+    with pytest.raises(FileExistsError):
+        SQLiteMarketStore.restore_from_backup(backup, str(destination))
+    assert destination.read_bytes() == b"keep"
+    sidecar_destination = tmp_path / "sidecar.sqlite"
+    (tmp_path / "sidecar.sqlite-wal").write_bytes(b"")
+    with pytest.raises(FileExistsError):
+        SQLiteMarketStore.restore_from_backup(backup, str(sidecar_destination))
+
+
+def test_corrupt_backup_is_rejected_without_creating_destination(tmp_path):
+    backup = tmp_path / "corrupt.sqlite"
+    backup.write_bytes(b"not a sqlite database")
+    destination = tmp_path / "never-created.sqlite"
+    with pytest.raises(sqlite3.DatabaseError):
+        SQLiteMarketStore.restore_from_backup(str(backup), str(destination))
+    assert not destination.exists()
+
+
+def test_cashflow_sign_multiplier_and_historical_mark():
+    notional = linear_futures_funding_notional(Decimal("0.2"), Decimal("10"), Decimal("50000"))
+    assert notional == Decimal("100000")
+    assert funding_payment(notional, Decimal("0.0001")) == Decimal("10")
+    assert funding_payment(notional, Decimal("-0.0001")) == Decimal("-10")
+    historical = linear_futures_funding_notional(Decimal("0.2"), Decimal("10"), Decimal("49000"))
+    current = linear_futures_funding_notional(Decimal("0.2"), Decimal("10"), Decimal("50000"))
+    assert historical != current
