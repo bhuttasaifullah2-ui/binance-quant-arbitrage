@@ -117,8 +117,14 @@ def validate_scanner_eligibility(
     funding_max_age = int(context.get("max_funding_age_ms", max_age))
     if funding_age is None or int(funding_age) > funding_max_age:
         reject("FUNDING_DATA_STALE", "Current funding observation is missing or stale")
-    if context.get("funding_inconsistent") or context.get("funding_gaps"):
-        reject("FUNDING_HISTORY_INCONSISTENT", "Funding history contains unresolved or inconsistent settlement intervals")
+    if context.get("funding_history_missing"):
+        reject("FUNDING_HISTORY_MISSING", "No realized funding settlements are available for this symbol")
+    if context.get("funding_history_stale"):
+        reject("FUNDING_HISTORY_STALE", "Latest realized funding settlement is older than the expected previous settlement")
+    if context.get("funding_gaps"):
+        reject("FUNDING_HISTORY_INCOMPLETE", "Funding history contains unresolved settlement intervals")
+    if context.get("funding_inconsistent"):
+        reject("FUNDING_RECONCILIATION_FAILED", "Current observed funding does not match the latest realized settlement")
     next_funding = _decimal(fields.get("next_funding_time_ms"))
     if next_funding is None or next_funding <= checked_at_ms:
         reject("FUNDING_TIMESTAMP_INVALID", "Next funding timestamp is missing, invalid, or already expired")
@@ -144,7 +150,10 @@ def validate_scanner_eligibility(
         "websocket_health": {name: bool((context.get("websocket_feeds") or {}).get(name, {}).get("healthy"))
                              for name in ("spot", "futures")},
         "clock_offsets_ms": offsets,
-        "funding_data_status": "INCONSISTENT" if context.get("funding_inconsistent") or context.get("funding_gaps") else
+        "funding_data_status": "RECONCILIATION_FAILED" if context.get("funding_inconsistent") else
+                               "INCOMPLETE" if context.get("funding_gaps") else
+                               "MISSING" if context.get("funding_history_missing") else
+                               "HISTORY_STALE" if context.get("funding_history_stale") else
                                "STALE" if funding_age is None or int(funding_age) > funding_max_age else "CURRENT",
     }
     return EligibilityDecision(not rejected, symbol.upper(), checked_at_ms, tuple(rejected), diagnostics)
