@@ -86,3 +86,11 @@ def funding_history_gaps(observations: list[FundingObservation], interval_hours:
     ordered = sorted({x.funding_time_ms for x in observations})
     expected = interval_hours * 3600000
     return [(a, b) for a, b in zip(ordered, ordered[1:]) if b-a > expected+tolerance_ms]
+
+
+def linear_futures_funding_notional(quantity: Decimal, contract_multiplier: Decimal,
+                                    mark_price: Decimal) -> Decimal:
+    """Return linear USDⓈ-M position notional at the supplied mark price."""
+    if quantity <= 0 or contract_multiplier <= 0 or mark_price <= 0:
+        raise ValueError("quantity, contract multiplier and mark price must be positive")
+    return quantity * contract_multiplier * mark_price
