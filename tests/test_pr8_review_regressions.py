@@ -357,6 +357,6 @@ def test_restore_rejects_missing_and_empty_sqlite_backup(tmp_path):
     empty = tmp_path / "empty.sqlite"
     with sqlite3.connect(empty):
         pass
-    with pytest.raises(sqlite3.DatabaseError, match="expected market-store tables"):
+    with pytest.raises(sqlite3.DatabaseError, match="funding_observations table"):
         SQLiteMarketStore.restore_from_backup(str(empty), str(destination))
     assert not destination.exists()
