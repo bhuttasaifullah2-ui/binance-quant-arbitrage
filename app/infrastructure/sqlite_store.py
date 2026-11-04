@@ -74,9 +74,11 @@ class SQLiteMarketStore:
         with self._connect() as conn:
             conn.executescript(SCHEMA)
             row = conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
-            if row is None:
-                conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
-            elif int(row["version"]) < SCHEMA_VERSION:
+            columns = {item["name"] for item in conn.execute(
+                "PRAGMA table_info(funding_observations)").fetchall()}
+            current_version = 0 if row is None else int(row["version"])
+            needs_rebuild = "settlement_mark_price" not in columns or "rate_type" not in columns
+            if current_version < SCHEMA_VERSION or needs_rebuild:
                 backup_path = Path(f"{self.path}.pre_v4.bak")
                 if not backup_path.exists():
                     with sqlite3.connect(backup_path) as backup:
@@ -104,6 +106,8 @@ class SQLiteMarketStore:
                 conn.execute("DELETE FROM schema_version")
                 conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
                 conn.commit()
+            elif row is None:
+                conn.execute("INSERT INTO schema_version(version) VALUES (?)", (SCHEMA_VERSION,))
             conn.execute("""CREATE UNIQUE INDEX IF NOT EXISTS uq_funding_event_payload
                 ON funding_observations(symbol, funding_time_ms, funding_rate,
                     COALESCE(settlement_mark_price, ''), COALESCE(rate_type, ''), source)""")
