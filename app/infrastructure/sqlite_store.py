@@ -233,8 +233,8 @@ class SQLiteMarketStore:
         except Exception:
             if linked:
                 destination.unlink(missing_ok=True)
-            for sidecar in sidecars:
-                sidecar.unlink(missing_ok=True)
+                for sidecar in sidecars:
+                    sidecar.unlink(missing_ok=True)
             raise
         finally:
             source.close()
