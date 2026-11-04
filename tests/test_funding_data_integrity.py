@@ -130,11 +130,12 @@ def test_public_funding_info_failure_can_recover_without_credentials():
                 await client.futures_funding_info()
             except BinanceAPIError:
                 pass
-            return await client.futures_funding_info(), client.calls
+            rows = await client.futures_funding_info()
+            return rows, client.calls, client.paths
         finally:
             await client.close()
 
-    rows, calls = asyncio.run(scenario())
+    rows, calls, paths = asyncio.run(scenario())
     assert calls == 2
+    assert paths == [("futures", "/fapi/v1/fundingInfo")] * 2
     assert rows[0]["fundingIntervalHours"] == 1
-    assert ("futures", "/fapi/v1/fundingInfo") in FlakyClient().paths or calls == 2
