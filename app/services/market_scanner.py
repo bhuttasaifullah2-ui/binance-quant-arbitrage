@@ -170,6 +170,18 @@ class MarketScanner:
             self._eligibility_decisions = {}
             try:
                 spot_info, fut_info = await self._metadata(started)
+                # This public endpoint lists symbols whose USD-M funding interval
+                # differs from the documented default schedule.
+                funding_info_rows = await self.client.futures_funding_info()
+                funding_interval_overrides: dict[str, int] = {}
+                for info in funding_info_rows:
+                    symbol_key = str(info.get("symbol", "")).upper()
+                    if not symbol_key or info.get("fundingIntervalHours") is None:
+                        continue
+                    interval_hours = int(info["fundingIntervalHours"])
+                    if not 1 <= interval_hours <= 24:
+                        raise ValueError(f"Invalid exchange funding interval for {symbol_key}")
+                    funding_interval_overrides[symbol_key] = interval_hours
                 spot_symbols, fut_symbols = _eligible_spot(spot_info), _eligible_futures(fut_info)
                 common = sorted(spot_symbols & fut_symbols)
                 self.last_pair_count = len(common)
@@ -234,7 +246,8 @@ class MarketScanner:
                             existing_obs = [FundingObservation(symbol, _d(x["funding_rate"]), int(x["funding_time_ms"]))
                                             for x in existing]
                             if existing_obs:
-                                interval = detect_funding_interval_hours([x.funding_time_ms for x in existing_obs])
+                                interval = funding_interval_overrides.get(
+                                    symbol, detect_funding_interval_hours([x.funding_time_ms for x in existing_obs]))
                                 gaps = funding_history_gaps(existing_obs, interval)
                                 if gaps:
                                     gap_start, gap_end = gaps[0]
@@ -325,7 +338,8 @@ class MarketScanner:
                             if rate is not None and stamp is not None:
                                 funding_obs.append(FundingObservation(symbol, _d(rate), int(stamp)))
                         stats = summarize_funding(funding_obs)
-                        funding_interval = detect_funding_interval_hours([x.funding_time_ms for x in funding_obs])
+                        funding_interval = funding_interval_overrides.get(
+                            symbol, detect_funding_interval_hours([x.funding_time_ms for x in funding_obs]))
                         history_gaps = funding_history_gaps(funding_obs, funding_interval)
                         latest_history = max(funding_obs, key=lambda x: x.funding_time_ms) if funding_obs else None
                         expected_previous_settlement_ms = next_funding - funding_interval * 3600000
