@@ -4,7 +4,7 @@ Read-only Binance Spot LONG + USD-M perpetual SHORT funding-rate market intellig
 
 ## Current milestone
 
-Phase 1 research foundation, Phase 2 market-data scanner and Phase 2.1 integrated market-intelligence improvements are present. Phase 2.1 adds normalized public WebSocket streams, REST snapshot recovery, per-field freshness, exchange filter validation, paginated funding history, VWAP execution estimates, explainable hedge-aware ranking and optional observation persistence. Phase 2.2 adds public-only validation, session-scoped evidence and a local read-only research dashboard.
+Phase 1 research foundation, Phase 2 market-data scanner and Phase 2.1 integrated market-intelligence improvements are present. Phase 2.1 adds normalized public WebSocket streams, REST snapshot recovery, per-field freshness, exchange filter validation, paginated funding history, VWAP execution estimates, explainable hedge-aware ranking and optional observation persistence. The research scanner uses public USD-M funding-interval metadata, mark-notional funding estimates, and four-leg execution shortfall versus mid prices (spread plus visible-book impact). Phase 2.2 adds public-only validation, session-scoped evidence and a local read-only research dashboard.
 
 **No live trading:** there are no authenticated Binance endpoints, order-placement methods, or automated position operations. Estimates are not realized returns or guarantees.
 
