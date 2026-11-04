@@ -75,7 +75,9 @@ def detect_funding_interval_hours(funding_times_ms: list[int], default_hours: in
                   else Decimal(ordered_gaps[mid-1] + ordered_gaps[mid]) / 2)
     hours = (median_gap / Decimal("3600000")).to_integral_value(rounding=ROUND_HALF_UP)
     result = int(hours)
-    return result if 1 <= result <= 24 else default_hours
+    # Documented USD-M perpetual intervals are 1h, 4h and 8h. An observed
+    # 16h gap must not be reclassified as a legitimate 16h interval.
+    return result if result in {1, 4, 8} else default_hours
 
 
 def funding_history_gaps(observations: list[FundingObservation], interval_hours: int,
