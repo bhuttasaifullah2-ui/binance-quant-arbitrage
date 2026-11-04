@@ -13,13 +13,16 @@ class FundingClient:
 
     async def futures_premium_index(self):
         return [{"symbol": "BTCUSDT", "lastFundingRate": self.rows[-1]["fundingRate"],
-                 "nextFundingTime": int(time.time() * 1000) + 3600000}]
+                 "nextFundingTime": int(self.rows[-1]["fundingTime"]) + 8 * 3600000 + 1000}]
 
     async def futures_funding_history(self, symbol, limit, start_time_ms=None, end_time_ms=None):
         if start_time_ms is None:
             return list(self.rows)
         self.backfill_calls += 1
         return list(self.backfill_rows)
+
+    async def futures_funding_info(self):
+        return []
 
 
 class Dummy:
