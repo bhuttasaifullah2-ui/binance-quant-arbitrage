@@ -6,7 +6,7 @@
 - WebSocket counters are process-lifetime metrics; downtime before process start cannot be measured.
 - Spot bookTicker has no exchange event timestamp; existing receive-time/update-ID protection remains.
 - Data-quality classification covers required normalized fields in the hub; order-book snapshots and exchange metadata require explicit REST validation.
-- Funding gap detection is a conservative interval-gap heuristic, not proof that every exchange settlement was received.
+- Funding gap detection uses the public USD-M funding-info interval override where supplied and otherwise infers only documented 1h/4h/8h intervals. Historical schedule transitions and incomplete pagination can still leave ambiguity; unresolved or stale latest settlements block eligibility. This is not proof that every exchange settlement was received.
 - Theoretical hedge validation uses public metadata and top-of-book prices; it does not model balances, commissions, margin, liquidation or actual fills.
 - Profitability sensitivity uses illustrative fee/slippage assumptions and a one-settlement model. It is not realized PnL or a forecast.
 - Legacy daily/cumulative reports remain cross-session historical reports. Session-specific exports are separate and must be used when isolating one process run.
@@ -19,3 +19,5 @@
 - No real-world uptime, fill quality, funding income or trading performance is established by deterministic CI.
 
 See docs/PHASE_2_2_1_ACCEPTANCE.md for implementation details and the current acceptance boundary.
+
+- Net funding uses Futures mark notional; execution shortfall estimates spread crossing and visible-book impact across four legs. Static configured fee assumptions, basis risk and future funding remain estimates, not execution guarantees.
