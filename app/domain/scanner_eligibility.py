@@ -121,6 +121,8 @@ def validate_scanner_eligibility(
         reject("FUNDING_HISTORY_MISSING", "No realized funding settlements are available for this symbol")
     if context.get("funding_history_stale"):
         reject("FUNDING_HISTORY_STALE", "Latest realized funding settlement is older than the expected previous settlement")
+    if context.get("funding_settlement_time_mismatch"):
+        reject("FUNDING_SETTLEMENT_TIME_MISMATCH", "Latest realized funding settlement timestamp is later than the expected schedule")
     if context.get("funding_gaps"):
         reject("FUNDING_HISTORY_INCOMPLETE", "Funding history contains unresolved settlement intervals")
     if context.get("funding_inconsistent"):
@@ -154,6 +156,7 @@ def validate_scanner_eligibility(
                                "INCOMPLETE" if context.get("funding_gaps") else
                                "MISSING" if context.get("funding_history_missing") else
                                "HISTORY_STALE" if context.get("funding_history_stale") else
+                               "SETTLEMENT_TIME_MISMATCH" if context.get("funding_settlement_time_mismatch") else
                                "STALE" if funding_age is None or int(funding_age) > funding_max_age else "CURRENT",
     }
     return EligibilityDecision(not rejected, symbol.upper(), checked_at_ms, tuple(rejected), diagnostics)
