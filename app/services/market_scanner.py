@@ -33,6 +33,12 @@ def _d(value: Any) -> Decimal:
     return Decimal(str(value))
 
 
+def _merge_funding_history(new_rows: list[dict[str, Any]],
+                           stored_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge REST and stored observations by economic event, retaining provenance."""
+    return deduplicate_economic_settlements(list(new_rows) + list(stored_rows))
+
+
 def _eligible_spot(info: dict[str, Any]) -> set[str]:
     return {s["symbol"] for s in info.get("symbols", [])
             if s.get("status") == "TRADING" and s.get("quoteAsset") == "USDT"
@@ -342,7 +348,7 @@ class MarketScanner:
                         self._reject(symbol, f"detailed market request failed:{type(result).__name__}", now); continue
                     sd, fd, oi, new_history = result
                     stored_history = self.store.funding_history(symbol, self.config.history_limit)
-                    hist = deduplicate_economic_settlements(list(new_history) + stored_history)
+                    hist = _merge_funding_history(new_history, stored_history)
                     try:
                         if not sd.get("bids") or not sd.get("asks") or not fd.get("bids") or not fd.get("asks"):
                             self._reject(symbol, "missing order-book side", now); continue
