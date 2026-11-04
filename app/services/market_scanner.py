@@ -205,14 +205,6 @@ class MarketScanner:
                     str(info.get("symbol", "")).upper(): info for info in funding_info_rows
                     if info.get("symbol")
                 }
-                funding_interval_overrides: dict[str, int] = {}
-                for symbol_key, info in funding_info_by_symbol.items():
-                    interval_hours = int(info.get("fundingIntervalHours", 0))
-                    if interval_hours not in (1, 4, 8):
-                        self._reject(symbol_key, "Binance fundingInfo interval is missing or unsupported",
-                                     started, "FUNDING_HISTORY_INCOMPLETE")
-                        continue
-                    funding_interval_overrides[symbol_key] = interval_hours
                 spot_symbols, fut_symbols = _eligible_spot(spot_info), _eligible_futures(fut_info)
                 spot_meta = {x["symbol"]: x for x in spot_info.get("symbols", []) if x.get("symbol")}
                 futures_meta = {x["symbol"]: x for x in fut_info.get("symbols", []) if x.get("symbol")}
