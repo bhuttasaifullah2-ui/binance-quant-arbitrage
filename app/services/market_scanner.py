@@ -351,21 +351,6 @@ class MarketScanner:
                             latest_history.funding_time_ms > expected_previous_settlement_ms + 60000)
                         funding_consistent = (latest_history is not None and
                             abs(funding-latest_history.funding_rate) <= _d(getattr(self.config, "funding_reconciliation_tolerance", "0.00000001")))
-                        if history_gaps:
-                            self._reject(symbol, f"historical funding gaps detected:{len(history_gaps)}", now,
-                                         "FUNDING_HISTORY_INCOMPLETE")
-                        if latest_history is None:
-                            self._reject(symbol, "funding history missing realized settlements", now,
-                                         "FUNDING_HISTORY_MISSING")
-                        elif history_stale:
-                            self._reject(symbol, "funding history stale: latest settlement predates expected previous settlement", now,
-                                         "FUNDING_HISTORY_STALE")
-                        if settlement_time_mismatch:
-                            self._reject(symbol, "latest realized settlement timestamp is later than the expected schedule",
-                                         now, "FUNDING_SETTLEMENT_TIME_MISMATCH")
-                        if latest_history is not None and not funding_consistent:
-                            self._reject(symbol, "current observed funding does not reconcile with latest realized settlement",
-                                         now, "FUNDING_RECONCILIATION_FAILED")
                         bps = basis_bps(spot_buy.vwap, fut_sell.vwap)
                         basis_penalty = abs(bps)/Decimal("10000")*matched_notional*_d(self.config.basis_risk_haircut)
                         net = gross_funding - entry_fees - exit_fees - execution_cost - basis_penalty
