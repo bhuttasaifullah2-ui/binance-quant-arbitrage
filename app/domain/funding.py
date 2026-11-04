@@ -20,7 +20,8 @@ def deduplicate_funding_observations(observations: list[FundingObservation]) -> 
 
 
 def summarize_funding(observations: list[FundingObservation]) -> dict[str, Decimal | int]:
-    observations = deduplicate_funding_observations(observations)
+    observations = [item for item in deduplicate_funding_observations(observations)
+                    if (item.rate_type or "Regular") == "Regular"]
     if not observations:
         return {"count": 0, "mean": Decimal("0"), "median": Decimal("0"),
                 "min": Decimal("0"), "max": Decimal("0"), "negative_fraction": Decimal("0"),
